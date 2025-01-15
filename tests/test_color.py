@@ -1,8 +1,7 @@
 import pytest
 from rich.color import Color as RichColor
-from rich.text import Text
 
-from textual.color import Color, Lab, lab_to_rgb, rgb_to_lab
+from textual.color import Color, Gradient, Lab, lab_to_rgb, rgb_to_lab
 
 
 def test_rich_color():
@@ -11,10 +10,6 @@ def test_rich_color():
     assert Color.from_rich_color(RichColor.from_rgb(10, 20, 30)) == Color(
         10, 20, 30, 1.0
     )
-
-
-def test_rich_color_rich_output():
-    assert isinstance(Color(10, 20, 30).__rich__(), Text)
 
 
 def test_normalized():
@@ -29,6 +24,9 @@ def test_css():
     """Check conversion to CSS style"""
     assert Color(10, 20, 30, 1.0).css == "rgb(10,20,30)"
     assert Color(10, 20, 30, 0.5).css == "rgba(10,20,30,0.5)"
+    assert Color(0, 0, 0, 0, ansi=1).css == "ansi_red"
+    assert Color(10, 20, 30, 0.5, 0, True).css == "auto 50%"
+    assert Color.automatic(70.5).css == "auto 70.5%"
 
 
 def test_monochrome():
@@ -42,8 +40,7 @@ def test_rgb():
     assert Color(10, 20, 30, 0.55).rgb == (10, 20, 30)
 
 
-def test_hls():
-
+def test_hsl():
     red = Color(200, 20, 32)
     print(red.hsl)
     assert red.hsl == pytest.approx(
@@ -52,6 +49,7 @@ def test_hls():
     assert Color.from_hsl(
         0.9888888888888889, 0.818181818181818, 0.43137254901960786
     ).normalized == pytest.approx(red.normalized, rel=1e-5)
+    assert red.hsl.css == "hsl(356,81.8%,43.1%)"
 
 
 def test_color_brightness():
@@ -66,6 +64,12 @@ def test_color_hex():
     assert Color(255, 0, 127, 0.5).hex == "#FF007F7F"
 
 
+def test_color_hex6():
+    assert Color(0, 0, 0).hex6 == "#000000"
+    assert Color(255, 255, 255, 0.25).hex6 == "#FFFFFF"
+    assert Color(255, 0, 127, 0.5).hex6 == "#FF007F"
+
+
 def test_color_css():
     assert Color(255, 0, 127).css == "rgb(255,0,127)"
     assert Color(255, 0, 127, 0.5).css == "rgba(255,0,127,0.5)"
@@ -73,6 +77,11 @@ def test_color_css():
 
 def test_color_with_alpha():
     assert Color(255, 50, 100).with_alpha(0.25) == Color(255, 50, 100, 0.25)
+
+
+def test_multiply_alpha():
+    assert Color(100, 100, 100).multiply_alpha(0.5) == Color(100, 100, 100, 0.5)
+    assert Color(100, 100, 100, 0.5).multiply_alpha(0.5) == Color(100, 100, 100, 0.25)
 
 
 def test_color_blend():
@@ -148,8 +157,24 @@ def test_color_parse_color():
     assert Color.parse(color) is color
 
 
-def test_color_add():
-    assert Color(50, 100, 200) + Color(10, 20, 30, 0.9) == Color(14, 28, 47)
+@pytest.mark.parametrize(
+    ["color1", "color2", "expected"],
+    [
+        # No alpha results in the RHS
+        (Color(1, 2, 3), Color(20, 30, 40), Color(20, 30, 40)),
+        # 0.9 alpha results in a blend 90% biased towards the RHS
+        (Color(50, 100, 200), Color(10, 20, 30, 0.9), Color(14, 28, 47)),
+        # Automatic color results in white or black
+        (Color(200, 200, 200), Color.automatic(), Color(0, 0, 0)),
+        (Color(20, 20, 20), Color.automatic(), Color(255, 255, 255)),
+        # An automatic color will pick white or black and blend towards that
+        (Color(200, 200, 200), Color.automatic(50), Color(100, 100, 100)),
+        # Not a color produces NotImplemented
+        (Color(1, 2, 3), "foo", NotImplemented),
+    ],
+)
+def test_color_add(color1, color2, expected):
+    assert color1.__add__(color2) == expected
 
 
 # Computed with http://www.easyrgb.com/en/convert.php,
@@ -216,3 +241,73 @@ def test_rgb_lab_rgb_roundtrip():
 
 def test_inverse():
     assert Color(55, 0, 255, 0.1).inverse == Color(200, 255, 0, 0.1)
+
+
+def test_gradient_errors():
+    with pytest.raises(ValueError):
+        Gradient()
+    with pytest.raises(ValueError):
+        Gradient((0.1, Color.parse("red")))
+    with pytest.raises(ValueError):
+        Gradient((0.1, Color.parse("red")), (1, Color.parse("blue")))
+    with pytest.raises(ValueError):
+        Gradient((0, Color.parse("red")))
+
+    with pytest.raises(ValueError):
+        Gradient(
+            (0, Color.parse("red")),
+            (0.8, Color.parse("blue")),
+        )
+
+    with pytest.raises(ValueError):
+        Gradient.from_colors(Color(200, 0, 0))
+
+
+def test_gradient():
+    gradient = Gradient(
+        (0, Color(255, 0, 0)),
+        (0.5, "blue"),
+        (1, Color(0, 255, 0)),
+        quality=11,
+    )
+
+    assert gradient.get_color(-1) == Color(255, 0, 0)
+    assert gradient.get_color(0) == Color(255, 0, 0)
+    assert gradient.get_color(1) == Color(0, 255, 0)
+    assert gradient.get_color(1.2) == Color(0, 255, 0)
+    assert gradient.get_color(0.5) == Color(0, 0, 255)
+    assert gradient.get_color(0.7) == Color(0, 101, 153)
+
+
+def test_is_transparent():
+    """Check is_transparent is reporting correctly."""
+    assert Color(0, 0, 0, 0).is_transparent
+    assert Color(20, 20, 30, 0).is_transparent
+    assert not Color(20, 20, 30, a=0.01).is_transparent
+    assert not Color(20, 20, 30, a=1).is_transparent
+    assert not Color(20, 20, 30, 0, ansi=1).is_transparent
+
+
+@pytest.mark.parametrize(
+    "base,tint,expected",
+    [
+        (
+            Color(0, 0, 0),
+            Color(10, 20, 30),
+            Color(10, 20, 30),
+        ),
+        (
+            Color(0, 0, 0, 0.5),
+            Color(255, 255, 255, 0.5),
+            Color(127, 127, 127, 0.5),
+        ),
+        (
+            Color(100, 0, 0, 0.2),
+            Color(0, 100, 0, 0.5),
+            Color(50, 50, 0, 0.2),
+        ),
+        (Color(10, 20, 30), Color.parse("ansi_red"), Color(10, 20, 30)),
+    ],
+)
+def test_tint(base: Color, tint: Color, expected: Color) -> None:
+    assert base.tint(tint) == expected

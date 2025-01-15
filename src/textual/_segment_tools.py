@@ -4,15 +4,65 @@ Tools for processing Segments, or lists of Segments.
 
 from __future__ import annotations
 
+import re
 from typing import Iterable
 
 from rich.segment import Segment
 from rich.style import Style
 
-from ._cells import cell_len
-from ._types import Lines
-from .css.types import AlignHorizontal, AlignVertical
-from .geometry import Size
+from textual._cells import cell_len
+from textual.css.types import AlignHorizontal, AlignVertical
+from textual.geometry import Size
+
+
+class NoCellPositionForIndex(Exception):
+    pass
+
+
+def index_to_cell_position(segments: Iterable[Segment], index: int) -> int:
+    """Given a character index, return the cell position of that character within
+    an Iterable of Segments. This is the sum of the cell lengths of all the characters
+    *before* the character at `index`.
+
+    Args:
+        segments: The segments to find the cell position within.
+        index: The index to convert into a cell position.
+
+    Returns:
+        The cell position of the character at `index`.
+
+    Raises:
+        NoCellPositionForIndex: If the supplied index doesn't fall within the given segments.
+    """
+    if not segments:
+        raise NoCellPositionForIndex
+
+    if index == 0:
+        return 0
+
+    cell_position_end = 0
+    segment_length = 0
+    segment_end_index = 0
+    segment_cell_length = 0
+    text = ""
+    iter_segments = iter(segments)
+    try:
+        while segment_end_index < index:
+            segment = next(iter_segments)
+            text = segment.text
+            segment_length = len(text)
+            segment_cell_length = cell_len(text)
+            cell_position_end += segment_cell_length
+            segment_end_index += segment_length
+    except StopIteration:
+        raise NoCellPositionForIndex
+
+    # Check how far into this segment the target index is
+    segment_index_start = segment_end_index - segment_length
+    index_within_segment = index - segment_index_start
+    segment_cell_start = cell_position_end - segment_cell_length
+
+    return segment_cell_start + cell_len(text[:index_within_segment])
 
 
 def line_crop(
@@ -21,12 +71,12 @@ def line_crop(
     """Crops a list of segments between two cell offsets.
 
     Args:
-        segments (list[Segment]): A list of Segments for a line.
-        start (int): Start offset
-        end (int): End offset (exclusive)
-        total (int): Total cell length of segments.
+        segments: A list of Segments for a line.
+        start: Start offset (cells)
+        end: End offset (cells, exclusive)
+        total: Total cell length of segments.
     Returns:
-        list[Segment]: A new shorter list of segments
+        A new shorter list of segments
     """
     # This is essentially a specialized version of Segment.divide
     # The following line has equivalent functionality (but a little slower)
@@ -72,12 +122,12 @@ def line_trim(segments: list[Segment], start: bool, end: bool) -> list[Segment]:
     """Optionally remove a cell from the start and / or end of a list of segments.
 
     Args:
-        segments (list[Segment]): A line (list of Segments)
-        start (bool): Remove cell from start.
-        end (bool): Remove cell from end.
+        segments: A line (list of Segments)
+        start: Remove cell from start.
+        end: Remove cell from end.
 
     Returns:
-        list[Segment]: A new list of segments.
+        A new list of segments.
     """
     segments = segments.copy()
     if segments and start:
@@ -102,13 +152,13 @@ def line_pad(
     """Adds padding to the left and / or right of a list of segments.
 
     Args:
-        segments (Iterable[Segment]): A line of segments.
-        pad_left (int): Cells to pad on the left.
-        pad_right (int): Cells to pad on the right.
-        style (Style): Style of padded cells.
+        segments: A line of segments.
+        pad_left: Cells to pad on the left.
+        pad_right: Cells to pad on the right.
+        style: Style of padded cells.
 
     Returns:
-        list[Segment]: A new line with padding.
+        A new line with padding.
     """
     if pad_left and pad_right:
         return [
@@ -130,7 +180,7 @@ def line_pad(
 
 
 def align_lines(
-    lines: Lines,
+    lines: list[list[Segment]],
     style: Style,
     size: Size,
     horizontal: AlignHorizontal,
@@ -139,21 +189,32 @@ def align_lines(
     """Align lines.
 
     Args:
-        lines (Lines): A list of lines.
-        style (Style): Background style.
-        size (Size): Size of container.
-        horizontal (AlignHorizontal): Horizontal alignment.
-        vertical (AlignVertical): Vertical alignment
+        lines: A list of lines.
+        style: Background style.
+        size: Size of container.
+        horizontal: Horizontal alignment.
+        vertical: Vertical alignment.
 
     Returns:
-        Iterable[list[Segment]]: Aligned lines.
-
+        Aligned lines.
     """
-
+    if not lines:
+        return
     width, height = size
-    shape_width, shape_height = Segment.get_shape(lines)
+    get_line_length = Segment.get_line_length
+    line_lengths = [get_line_length(line) for line in lines]
+    shape_width = max(line_lengths)
+    shape_height = len(line_lengths)
 
-    def blank_lines(count: int) -> Lines:
+    def blank_lines(count: int) -> list[list[Segment]]:
+        """Create blank lines.
+
+        Args:
+            count: Desired number of blank lines.
+
+        Returns:
+            A list of blank lines.
+        """
         return [[Segment(" " * width, style)]] * count
 
     top_blank_lines = bottom_blank_lines = 0
@@ -163,31 +224,69 @@ def align_lines(
         bottom_blank_lines = vertical_excess_space
     elif vertical == "middle":
         top_blank_lines = vertical_excess_space // 2
-        bottom_blank_lines = height - top_blank_lines
+        bottom_blank_lines = vertical_excess_space - top_blank_lines
     elif vertical == "bottom":
         top_blank_lines = vertical_excess_space
 
-    yield from blank_lines(top_blank_lines)
+    if top_blank_lines:
+        yield from blank_lines(top_blank_lines)
 
-    horizontal_excess_space = max(0, width - shape_width)
-
-    adjust_line_length = Segment.adjust_line_length
     if horizontal == "left":
-        for line in lines:
-            yield adjust_line_length(line, width, style, pad=True)
+        for cell_length, line in zip(line_lengths, lines):
+            if cell_length == width:
+                yield line
+            else:
+                yield line_pad(line, 0, width - cell_length, style)
 
     elif horizontal == "center":
-        left_space = horizontal_excess_space // 2
-        for line in lines:
-            yield [
-                Segment(" " * left_space, style),
-                *adjust_line_length(line, width - left_space, style, pad=True),
-            ]
+        left_space = max(0, width - shape_width) // 2
+        for cell_length, line in zip(line_lengths, lines):
+            if cell_length == width:
+                yield line
+            else:
+                yield line_pad(
+                    line, left_space, width - cell_length - left_space, style
+                )
 
     elif horizontal == "right":
-        get_line_length = Segment.get_line_length
-        for line in lines:
-            left_space = width - get_line_length(line)
-            yield [Segment(" " * left_space, style), *line]
+        for cell_length, line in zip(line_lengths, lines):
+            if width == cell_length:
+                yield line
+            else:
+                yield line_pad(line, width - cell_length, 0, style)
 
-    yield from blank_lines(bottom_blank_lines)
+    if bottom_blank_lines:
+        yield from blank_lines(bottom_blank_lines)
+
+
+_re_spaces = re.compile(r"(\s+|\S+)")
+
+
+def apply_hatch(
+    segments: Iterable[Segment],
+    character: str,
+    hatch_style: Style,
+    _split=_re_spaces.split,
+) -> Iterable[Segment]:
+    """Replace run of spaces with another character + style.
+
+    Args:
+        segments: Segments to process.
+        character: Character to replace spaces.
+        hatch_style: Style of replacement characters.
+
+    Yields:
+        Segments.
+    """
+    _Segment = Segment
+    for segment in segments:
+        if " " not in segment.text:
+            yield segment
+        else:
+            text, style, _ = segment
+            for token in _split(text):
+                if token:
+                    if token.isspace():
+                        yield _Segment(character * len(token), hatch_style)
+                    else:
+                        yield _Segment(token, style)

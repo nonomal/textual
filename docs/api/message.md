@@ -1,1 +1,5 @@
-::: textual.message.Message
+---
+title: "textual.message"
+---
+
+::: textual.message

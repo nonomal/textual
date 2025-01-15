@@ -2,22 +2,19 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from .scalar import ScalarOffset, Scalar
-from .._animator import Animation
-from .._animator import EasingFunction
-from .._types import CallbackType
-
+from textual._animator import Animation, EasingFunction
+from textual._types import AnimationLevel, CallbackType
+from textual.css.scalar import Scalar, ScalarOffset
 
 if TYPE_CHECKING:
-    from ..dom import DOMNode
-
-    from .styles import StylesBase
+    from textual.css.styles import StylesBase
+    from textual.widget import Widget
 
 
 class ScalarAnimation(Animation):
     def __init__(
         self,
-        widget: DOMNode,
+        widget: Widget,
         styles: StylesBase,
         start_time: float,
         attribute: str,
@@ -26,6 +23,7 @@ class ScalarAnimation(Animation):
         speed: float | None,
         easing: EasingFunction,
         on_complete: CallbackType | None = None,
+        level: AnimationLevel = "full",
     ):
         assert (
             speed is not None or duration is not None
@@ -37,6 +35,7 @@ class ScalarAnimation(Animation):
         self.final_value = value
         self.easing = easing
         self.on_complete = on_complete
+        self.level = level
 
         size = widget.outer_size
         viewport = widget.app.size
@@ -51,11 +50,18 @@ class ScalarAnimation(Animation):
             assert duration is not None, "Duration expected to be non-None"
             self.duration = duration
 
-    def __call__(self, time: float) -> bool:
+    def __call__(
+        self, time: float, app_animation_level: AnimationLevel = "full"
+    ) -> bool:
         factor = min(1.0, (time - self.start_time) / self.duration)
         eased_factor = self.easing(factor)
 
-        if eased_factor >= 1:
+        if (
+            eased_factor >= 1
+            or app_animation_level == "none"
+            or app_animation_level == "basic"
+            and self.level == "full"
+        ):
             setattr(self.styles, self.attribute, self.final_value)
             return True
 
@@ -65,9 +71,23 @@ class ScalarAnimation(Animation):
             value = self.start + (self.destination - self.start) * eased_factor
         current = self.styles.get_rule(self.attribute)
         if current != value:
-            setattr(self.styles, f"{self.attribute}", value)
+            setattr(self.styles, self.attribute, value)
 
         return False
+
+    async def stop(self, complete: bool = True) -> None:
+        """Stop the animation.
+
+        Args:
+            complete: Flag to say if the animation should be taken to completion.
+
+        Note:
+            [`on_complete`][Animation.on_complete] will be called regardless
+            of the value provided for `complete`.
+        """
+        if complete:
+            setattr(self.styles, self.attribute, self.final_value)
+        await self.invoke_callback()
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, ScalarAnimation):

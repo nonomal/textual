@@ -1,20 +1,52 @@
+"""
+The root Textual module.
+
+Exposes some commonly used symbols.
+
+"""
+
 from __future__ import annotations
 
 import inspect
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
 import rich.repr
-from rich.console import RenderableType
 
-__all__ = ["log", "panic"]
+from textual import constants
+from textual._context import active_app
+from textual._log import LogGroup, LogVerbosity
+from textual._on import on
+from textual._work_decorator import work
 
+if TYPE_CHECKING:
+    from typing_extensions import TypeAlias
 
-from ._context import active_app
-from ._log import LogGroup, LogVerbosity
-from ._typing import TypeAlias
+__all__ = [
+    "__version__",  # type: ignore
+    "log",
+    "on",
+    "work",
+]
 
 
 LogCallable: TypeAlias = "Callable"
+
+
+if TYPE_CHECKING:
+    from importlib.metadata import version
+
+    __version__ = version("textual")
+    """The version of Textual."""
+
+else:
+
+    def __getattr__(name: str) -> str:
+        """Lazily get the version."""
+        if name == "__version__":
+            from importlib.metadata import version
+
+            return version("textual")
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 class LoggerError(Exception):
@@ -23,7 +55,7 @@ class LoggerError(Exception):
 
 @rich.repr.auto
 class Logger:
-    """A Textual logger."""
+    """A [logger class](/guide/devtools/#logging-handler) that logs to the Textual [console](/guide/devtools#console)."""
 
     def __init__(
         self,
@@ -40,6 +72,16 @@ class Logger:
         yield self._verbosity, LogVerbosity.NORMAL
 
     def __call__(self, *args: object, **kwargs) -> None:
+        if constants.LOG_FILE:
+            output = " ".join(str(arg) for arg in args)
+            if kwargs:
+                key_values = " ".join(
+                    f"{key}={value!r}" for key, value in kwargs.items()
+                )
+                output = f"{output} {key_values}" if output else key_values
+
+            with open(constants.LOG_FILE, "a") as log_file:
+                print(output, file=log_file)
         try:
             app = active_app.get()
         except LookupError:
@@ -49,7 +91,10 @@ class Logger:
         if app.devtools is None or not app.devtools.is_connected:
             return
 
-        previous_frame = inspect.currentframe().f_back
+        current_frame = inspect.currentframe()
+        assert current_frame is not None
+        previous_frame = current_frame.f_back
+        assert previous_frame is not None
         caller = inspect.getframeinfo(previous_frame)
 
         _log = self._log or app._log
@@ -70,10 +115,10 @@ class Logger:
         """Get a new logger with selective verbosity.
 
         Args:
-            verbose (bool): True to use HIGH verbosity, otherwise NORMAL.
+            verbose: True to use HIGH verbosity, otherwise NORMAL.
 
         Returns:
-            Logger: New logger.
+            New logger.
         """
         verbosity = LogVerbosity.HIGH if verbose else LogVerbosity.NORMAL
         return Logger(self._log, self._group, verbosity)
@@ -113,12 +158,23 @@ class Logger:
         """Logs system information."""
         return Logger(self._log, LogGroup.SYSTEM)
 
+    @property
+    def logging(self) -> Logger:
+        """Logs from stdlib logging module."""
+        return Logger(self._log, LogGroup.LOGGING)
+
+    @property
+    def worker(self) -> Logger:
+        """Logs worker information."""
+        return Logger(self._log, LogGroup.WORKER)
+
 
 log = Logger(None)
+"""Global logger that logs to the currently active app.
 
-
-def panic(*args: RenderableType) -> None:
-    from ._context import active_app
-
-    app = active_app.get()
-    app.panic(*args)
+Example:
+    ```python
+    from textual import log
+    log(locals())
+    ```
+"""

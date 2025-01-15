@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from typing import Tuple
 
-from ..color import Color
-from .._typing import Literal
+from typing_extensions import Literal
 
-Edge = Literal["top", "right", "bottom", "left"]
-DockEdge = Literal["top", "right", "bottom", "left", ""]
+from textual.color import Color
+
+DockEdge = Literal["none", "top", "right", "bottom", "left"]
 EdgeType = Literal[
     "",
     "ascii",
@@ -15,6 +15,7 @@ EdgeType = Literal[
     "blank",
     "round",
     "solid",
+    "thick",
     "double",
     "dashed",
     "heavy",
@@ -23,6 +24,8 @@ EdgeType = Literal[
     "hkey",
     "vkey",
     "tall",
+    "tab",
+    "panel",
     "wide",
 ]
 Visibility = Literal["visible", "hidden", "initial", "inherit"]
@@ -34,6 +37,18 @@ BoxSizing = Literal["border-box", "content-box"]
 Overflow = Literal["scroll", "hidden", "auto"]
 EdgeStyle = Tuple[EdgeType, Color]
 TextAlign = Literal["left", "start", "center", "right", "end", "justify"]
+Constrain = Literal["none", "inflect", "inside"]
+Overlay = Literal["none", "screen"]
+Position = Literal["relative", "absolute"]
 
 Specificity3 = Tuple[int, int, int]
 Specificity6 = Tuple[int, int, int, int, int, int]
+
+CSSLocation = Tuple[str, str]
+"""Represents the definition location of a piece of CSS code.
+
+The first element of the tuple is the file path from where the CSS was read.
+If the CSS was read from a Python source file, the second element contains the class
+variable from where the CSS was read (e.g., "Widget.DEFAULT_CSS"), otherwise it's an
+empty string.
+"""

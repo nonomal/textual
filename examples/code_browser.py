@@ -4,31 +4,32 @@ Code browser example.
 Run with:
 
     python code_browser.py PATH
-
 """
+
+from __future__ import annotations
 
 import sys
 
 from rich.syntax import Syntax
 from rich.traceback import Traceback
 
-from textual import events
 from textual.app import App, ComposeResult
-from textual.containers import Container, Vertical
-from textual.reactive import var
+from textual.containers import Container, VerticalScroll
+from textual.reactive import reactive, var
 from textual.widgets import DirectoryTree, Footer, Header, Static
 
 
 class CodeBrowser(App):
     """Textual code browser app."""
 
-    CSS_PATH = "code_browser.css"
+    CSS_PATH = "code_browser.tcss"
     BINDINGS = [
         ("f", "toggle_files", "Toggle Files"),
         ("q", "quit", "Quit"),
     ]
 
     show_tree = var(True)
+    path: reactive[str | None] = reactive(None)
 
     def watch_show_tree(self, show_tree: bool) -> None:
         """Called when show_tree is modified."""
@@ -38,28 +39,41 @@ class CodeBrowser(App):
         """Compose our UI."""
         path = "./" if len(sys.argv) < 2 else sys.argv[1]
         yield Header()
-        yield Container(
-            DirectoryTree(path, id="tree-view"),
-            Vertical(Static(id="code", expand=True), id="code-view"),
-        )
+        with Container():
+            yield DirectoryTree(path, id="tree-view")
+            with VerticalScroll(id="code-view"):
+                yield Static(id="code", expand=True)
         yield Footer()
 
-    def on_mount(self, event: events.Mount) -> None:
+    def on_mount(self) -> None:
         self.query_one(DirectoryTree).focus()
+
+        def theme_change(_signal) -> None:
+            """Force the syntax to use a different theme."""
+            self.watch_path(self.path)
+
+        self.theme_changed_signal.subscribe(self, theme_change)
 
     def on_directory_tree_file_selected(
         self, event: DirectoryTree.FileSelected
     ) -> None:
         """Called when the user click a file in the directory tree."""
         event.stop()
+        self.path = str(event.path)
+
+    def watch_path(self, path: str | None) -> None:
+        """Called when path changes."""
         code_view = self.query_one("#code", Static)
+        if path is None:
+            code_view.update("")
+            return
         try:
             syntax = Syntax.from_path(
-                event.path,
+                path,
                 line_numbers=True,
                 word_wrap=False,
                 indent_guides=True,
-                theme="github-dark",
+                theme="github-dark" if self.current_theme.dark else "github-light",
             )
         except Exception:
             code_view.update(Traceback(theme="github-dark", width=None))
@@ -67,7 +81,7 @@ class CodeBrowser(App):
         else:
             code_view.update(syntax)
             self.query_one("#code-view").scroll_home(animate=False)
-            self.sub_title = event.path
+            self.sub_title = path
 
     def action_toggle_files(self) -> None:
         """Called in response to key binding."""

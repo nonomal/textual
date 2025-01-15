@@ -1,34 +1,30 @@
 """
 
+Contains the `Timer` class.
 Timer objects are created by [set_interval][textual.message_pump.MessagePump.set_interval] or
     [set_timer][textual.message_pump.MessagePump.set_timer].
-
 """
 
 from __future__ import annotations
 
-import asyncio
 import weakref
-from asyncio import (
-    CancelledError,
-    Event,
-    Task,
-)
-from typing import Awaitable, Callable, Union
+from asyncio import CancelledError, Event, Task, create_task, gather
+from typing import Any, Awaitable, Callable, Iterable, Union
 
 from rich.repr import Result, rich_repr
 
-from . import events
-from ._callback import invoke
-from ._context import active_app
-from . import _clock
-from ._types import MessageTarget
+from textual import _time, events
+from textual._callback import invoke
+from textual._context import active_app
+from textual._time import sleep
+from textual._types import MessageTarget
 
-TimerCallback = Union[Callable[[], Awaitable[None]], Callable[[], None]]
+TimerCallback = Union[Callable[[], Awaitable[Any]], Callable[[], Any]]
+"""Type of valid callbacks to be used with timers."""
 
 
 class EventTargetGone(Exception):
-    pass
+    """Raised if the timer event target has been deleted prior to the timer event being sent."""
 
 
 @rich_repr
@@ -36,14 +32,13 @@ class Timer:
     """A class to send timer-based events.
 
     Args:
-        event_target (MessageTarget): The object which will receive the timer events.
-        interval (float): The time between timer events.
-        sender (MessageTarget): The sender of the event.
-        name (str | None, optional): A name to assign the event (for debugging). Defaults to None.
-        callback (TimerCallback | None, optional): A optional callback to invoke when the event is handled. Defaults to None.
-        repeat (int | None, optional): The number of times to repeat the timer, or None to repeat forever. Defaults to None.
-        skip (bool, optional): Enable skipping of scheduled events that couldn't be sent in time. Defaults to True.
-        pause (bool, optional): Start the timer paused. Defaults to False.
+        event_target: The object which will receive the timer events.
+        interval: The time between timer events, in seconds.
+        name: A name to assign the event (for debugging).
+        callback: A optional callback to invoke when the event is handled.
+        repeat: The number of times to repeat the timer, or None to repeat forever.
+        skip: Enable skipping of scheduled events that couldn't be sent in time.
+        pause: Start the timer paused.
     """
 
     _timer_count: int = 1
@@ -52,7 +47,6 @@ class Timer:
         self,
         event_target: MessageTarget,
         interval: float,
-        sender: MessageTarget,
         *,
         name: str | None = None,
         callback: TimerCallback | None = None,
@@ -63,7 +57,6 @@ class Timer:
         self._target_repr = repr(event_target)
         self._target = weakref.ref(event_target)
         self._interval = interval
-        self.sender = sender
         self.name = f"Timer#{self._timer_count}" if name is None else name
         self._timer_count += 1
         self._callback = callback
@@ -87,33 +80,48 @@ class Timer:
             raise EventTargetGone()
         return target
 
-    def start(self) -> Task:
-        """Start the timer return the task.
+    def _start(self) -> None:
+        """Start the timer."""
+        self._task = create_task(self._run_timer(), name=self.name)
 
-        Returns:
-            Task: A Task instance for the timer.
-        """
-        self._task = asyncio.create_task(self._run_timer())
-        return self._task
-
-    def stop_no_wait(self) -> None:
+    def stop(self) -> None:
         """Stop the timer."""
-        if self._task is not None:
-            self._task.cancel()
-            self._task = None
+        if self._task is None:
+            return
 
-    async def stop(self) -> None:
-        """Stop the timer, and block until it exits."""
-        if self._task is not None:
-            self._active.set()
-            self._task.cancel()
-            self._task = None
+        self._active.set()
+        self._task.cancel()
+        self._task = None
+
+    @classmethod
+    async def _stop_all(cls, timers: Iterable[Timer]) -> None:
+        """Stop a number of timers, and await their completion.
+
+        Args:
+            timers: A number of timers.
+        """
+
+        async def stop_timer(timer: Timer) -> None:
+            """Stop a timer and wait for it to finish.
+
+            Args:
+                timer: A Timer instance.
+            """
+            if timer._task is not None:
+                timer._active.set()
+                timer._task.cancel()
+                try:
+                    await timer._task
+                except CancelledError:
+                    pass
+                timer._task = None
+
+        await gather(*[stop_timer(timer) for timer in list(timers)])
 
     def pause(self) -> None:
         """Pause the timer.
 
         A paused timer will not send events until it is resumed.
-
         """
         self._active.clear()
 
@@ -139,22 +147,21 @@ class Timer:
         _repeat = self._repeat
         _interval = self._interval
         await self._active.wait()
-        start = _clock.get_time_no_wait()
+        start = _time.get_time()
+
         while _repeat is None or count <= _repeat:
             next_timer = start + ((count + 1) * _interval)
-            now = await _clock.get_time()
+            now = _time.get_time()
             if self._skip and next_timer < now:
-                count += 1
+                count = int((now - start) / _interval + 1)
                 continue
-            now = await _clock.get_time()
+            now = _time.get_time()
             wait_time = max(0, next_timer - now)
-            if wait_time:
-                await _clock.sleep(wait_time)
-
+            await sleep(wait_time)
             count += 1
             await self._active.wait()
             if self._reset:
-                start = _clock.get_time_no_wait()
+                start = _time.get_time()
                 count = 0
                 self._reset = False
                 continue
@@ -165,18 +172,25 @@ class Timer:
 
     async def _tick(self, *, next_timer: float, count: int) -> None:
         """Triggers the Timer's action: either call its callback, or sends an event to its target"""
+
+        app = active_app.get()
+        if app._exit:
+            return
+
         if self._callback is not None:
             try:
                 await invoke(self._callback)
+            except CancelledError:
+                # https://github.com/Textualize/textual/pull/2895
+                # Re-raise CancelledErrors that would be caught by the following exception block in Python 3.7
+                raise
             except Exception as error:
-                app = active_app.get()
                 app._handle_exception(error)
         else:
             event = events.Timer(
-                self.sender,
                 timer=self,
                 time=next_timer,
                 count=count,
                 callback=self._callback,
             )
-            await self.target._post_priority_message(event)
+            self.target.post_message(event)

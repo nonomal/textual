@@ -1,5 +1,5 @@
 from textual.app import App
-from textual.widgets import Static
+from textual.widgets import Label
 
 TEXT = """I must not fear.
 Fear is the mind-killer.
@@ -11,8 +11,12 @@ Where the fear has gone there will be nothing. Only I will remain."""
 
 
 class PaddingApp(App):
+    CSS_PATH = "padding.tcss"
+
     def compose(self):
-        yield Static(TEXT)
+        yield Label(TEXT)
 
 
-app = PaddingApp(css_path="padding.css")
+if __name__ == "__main__":
+    app = PaddingApp()
+    app.run()

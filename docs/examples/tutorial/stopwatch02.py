@@ -1,13 +1,13 @@
 from textual.app import App, ComposeResult
-from textual.containers import Container
-from textual.widgets import Button, Header, Footer, Static
+from textual.containers import HorizontalGroup, VerticalScroll
+from textual.widgets import Button, Digits, Footer, Header
 
 
-class TimeDisplay(Static):
+class TimeDisplay(Digits):
     """A widget to display elapsed time."""
 
 
-class Stopwatch(Static):
+class Stopwatch(HorizontalGroup):
     """A stopwatch widget."""
 
     def compose(self) -> ComposeResult:
@@ -27,11 +27,13 @@ class StopwatchApp(App):
         """Create child widgets for the app."""
         yield Header()
         yield Footer()
-        yield Container(Stopwatch(), Stopwatch(), Stopwatch())
+        yield VerticalScroll(Stopwatch(), Stopwatch(), Stopwatch())
 
     def action_toggle_dark(self) -> None:
         """An action to toggle dark mode."""
-        self.dark = not self.dark
+        self.theme = (
+            "textual-dark" if self.theme == "textual-light" else "textual-light"
+        )
 
 
 if __name__ == "__main__":

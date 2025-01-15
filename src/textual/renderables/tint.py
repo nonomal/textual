@@ -2,43 +2,51 @@ from __future__ import annotations
 
 from typing import Iterable
 
-from rich.console import ConsoleOptions, Console, RenderResult, RenderableType
+from rich.console import RenderableType
 from rich.segment import Segment
 from rich.style import Style
+from rich.terminal_theme import TerminalTheme
 
-from ..color import Color
+from textual.color import Color
+from textual.filter import ANSIToTruecolor
 
 
 class Tint:
     """Applies a color on top of an existing renderable."""
 
-    def __init__(self, renderable: RenderableType, color: Color) -> None:
+    def __init__(
+        self,
+        renderable: RenderableType,
+        color: Color,
+    ) -> None:
         """Wrap a renderable to apply a tint color.
 
         Args:
-            renderable (RenderableType): A renderable.
-            color (Color): A color (presumably with alpha).
+            renderable: A renderable.
+            color: A color (presumably with alpha).
         """
         self.renderable = renderable
         self.color = color
 
     @classmethod
     def process_segments(
-        cls, segments: Iterable[Segment], color: Color
+        cls, segments: Iterable[Segment], color: Color, ansi_theme: TerminalTheme
     ) -> Iterable[Segment]:
         """Apply tint to segments.
 
         Args:
-            segments (Iterable[Segment]): Incoming segments.
-            color (Color): Color of tint.
+            segments: Incoming segments.
+            color: Color of tint.
+            ansi_theme: The TerminalTheme defining how to map ansi colors to hex.
 
         Returns:
-            Iterable[Segment]: Segments with applied tint.
-
+            Segments with applied tint.
         """
         from_rich_color = Color.from_rich_color
         style_from_color = Style.from_color
         _Segment = Segment
+
+        truecolor_style = ANSIToTruecolor(ansi_theme).truecolor_style
 
         NULL_STYLE = Style()
         for segment in segments:
@@ -46,7 +54,7 @@ class Tint:
             if control:
                 yield segment
             else:
-                style = style or NULL_STYLE
+                style = truecolor_style(style) if style is not None else NULL_STYLE
                 yield _Segment(
                     text,
                     (
@@ -66,10 +74,3 @@ class Tint:
                     ),
                     control,
                 )
-
-    def __rich_console__(
-        self, console: Console, options: ConsoleOptions
-    ) -> RenderResult:
-        segments = console.render(self.renderable, options)
-        color = self.color
-        return self.process_segments(segments, color)

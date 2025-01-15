@@ -1,5 +1,7 @@
 # Checkbox
 
+!!! tip "Added in version 0.13.0"
+
 A simple checkbox widget which stores a boolean value.
 
 - [x] Focusable
@@ -7,7 +9,7 @@ A simple checkbox widget which stores a boolean value.
 
 ## Example
 
-The example below shows checkboxes in various states.
+The example below shows check boxes in various states.
 
 === "Output"
 
@@ -20,38 +22,44 @@ The example below shows checkboxes in various states.
     --8<-- "docs/examples/widgets/checkbox.py"
     ```
 
-=== "checkbox.css"
+=== "checkbox.tcss"
 
     ```css
-    --8<-- "docs/examples/widgets/checkbox.css"
+    --8<-- "docs/examples/widgets/checkbox.tcss"
     ```
 
 ## Reactive Attributes
 
-| Name    | Type   | Default | Description                        |
-| ------- | ------ | ------- | ---------------------------------- |
-| `value` | `bool` | `False` | The default value of the checkbox. |
+| Name    | Type   | Default | Description                |
+| ------- | ------ | ------- | -------------------------- |
+| `value` | `bool` | `False` | The value of the checkbox. |
 
 ## Messages
 
-### Pressed
+- [Checkbox.Changed][textual.widgets.Checkbox.Changed]
 
-The `Checkbox.Changed` message is sent when the checkbox is toggled.
+## Bindings
 
-- [x] Bubbles
+The checkbox widget defines the following bindings:
 
-#### Attributes
+::: textual.widgets._toggle_button.ToggleButton.BINDINGS
+    options:
+      show_root_heading: false
+      show_root_toc_entry: false
 
-| attribute | type   | purpose                        |
-| --------- | ------ | ------------------------------ |
-| `value`   | `bool` | The new value of the checkbox. |
+## Component Classes
 
-## Additional Notes
+The checkbox widget inherits the following component classes:
 
-- To remove the spacing around a checkbox, set `border: none;` and `padding: 0;`.
-- The `.checkbox--switch` component class can be used to change the color and background of the switch.
-- When focused, the ++enter++ or ++space++ keys can be used to toggle the checkbox.
+::: textual.widgets._toggle_button.ToggleButton.COMPONENT_CLASSES
+    options:
+      show_root_heading: false
+      show_root_toc_entry: false
 
-## See Also
 
-- [Checkbox](../api/checkbox.md) code reference
+---
+
+
+::: textual.widgets.Checkbox
+    options:
+      heading_level: 2

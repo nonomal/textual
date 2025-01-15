@@ -1,19 +1,18 @@
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from functools import lru_cache
+from functools import partial
 from operator import attrgetter
-from typing import TYPE_CHECKING, Any, Iterable, NamedTuple, cast
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Literal, cast
 
 import rich.repr
 from rich.style import Style
+from typing_extensions import TypedDict
 
-from .._types import CallbackType
-from .._animator import BoundAnimator, DEFAULT_EASING, Animatable, EasingFunction
-from ..color import Color
-from ..geometry import Offset, Spacing
-from ._style_properties import (
+from textual._animator import DEFAULT_EASING, Animatable, BoundAnimator, EasingFunction
+from textual._types import AnimationLevel, CallbackType
+from textual.color import Color
+from textual.css._style_properties import (
     AlignProperty,
     BooleanProperty,
     BorderProperty,
@@ -21,49 +20,59 @@ from ._style_properties import (
     ColorProperty,
     DockProperty,
     FractionalProperty,
+    HatchProperty,
     IntegerProperty,
+    KeylineProperty,
     LayoutProperty,
     NameListProperty,
     NameProperty,
     OffsetProperty,
+    OverflowProperty,
     ScalarListProperty,
     ScalarProperty,
+    ScrollbarColorProperty,
     SpacingProperty,
+    SplitProperty,
     StringEnumProperty,
     StyleFlagsProperty,
     TransitionsProperty,
 )
-from .constants import (
+from textual.css.constants import (
     VALID_ALIGN_HORIZONTAL,
     VALID_ALIGN_VERTICAL,
     VALID_BOX_SIZING,
+    VALID_CONSTRAIN,
     VALID_DISPLAY,
     VALID_OVERFLOW,
+    VALID_OVERLAY,
+    VALID_POSITION,
     VALID_SCROLLBAR_GUTTER,
-    VALID_VISIBILITY,
     VALID_TEXT_ALIGN,
+    VALID_VISIBILITY,
 )
-from .scalar import Scalar, ScalarOffset, Unit
-from .scalar_animation import ScalarAnimation
-from .transition import Transition
-from .types import (
+from textual.css.scalar import Scalar, ScalarOffset, Unit
+from textual.css.scalar_animation import ScalarAnimation
+from textual.css.transition import Transition
+from textual.css.types import (
     AlignHorizontal,
     AlignVertical,
     BoxSizing,
+    Constrain,
     Display,
-    Edge,
     Overflow,
+    Overlay,
     ScrollbarGutter,
     Specificity3,
     Specificity6,
-    Visibility,
     TextAlign,
+    Visibility,
 )
-from .._typing import TypedDict
+from textual.geometry import Offset, Spacing
 
 if TYPE_CHECKING:
-    from .._layout import Layout
-    from ..dom import DOMNode
+    from textual.css.types import CSSLocation
+    from textual.dom import DOMNode
+    from textual.layout import Layout
 
 
 class RulesMap(TypedDict, total=False):
@@ -83,22 +92,30 @@ class RulesMap(TypedDict, total=False):
     background: Color
     text_style: Style
 
+    background_tint: Color
+
     opacity: float
     text_opacity: float
 
     padding: Spacing
     margin: Spacing
     offset: ScalarOffset
+    position: str
 
     border_top: tuple[str, Color]
     border_right: tuple[str, Color]
     border_bottom: tuple[str, Color]
     border_left: tuple[str, Color]
 
+    border_title_align: AlignHorizontal
+    border_subtitle_align: AlignHorizontal
+
     outline_top: tuple[str, Color]
     outline_right: tuple[str, Color]
     outline_bottom: tuple[str, Color]
     outline_left: tuple[str, Color]
+
+    keyline: tuple[str, Color]
 
     box_sizing: BoxSizing
     width: Scalar
@@ -109,6 +126,7 @@ class RulesMap(TypedDict, total=False):
     max_height: Scalar
 
     dock: str
+    split: str
 
     overflow_x: Overflow
     overflow_y: Overflow
@@ -158,10 +176,26 @@ class RulesMap(TypedDict, total=False):
     link_background: Color
     link_style: Style
 
-    link_hover_color: Color
-    auto_link_hover_color: bool
-    link_hover_background: Color
-    link_hover_style: Style
+    link_color_hover: Color
+    auto_link_color_hover: bool
+    link_background_hover: Color
+    link_style_hover: Style
+
+    auto_border_title_color: bool
+    border_title_color: Color
+    border_title_background: Color
+    border_title_style: Style
+
+    auto_border_subtitle_color: bool
+    border_subtitle_color: Color
+    border_subtitle_background: Color
+    border_subtitle_style: Style
+
+    hatch: tuple[str, Color] | Literal["none"]
+
+    overlay: Overlay
+    constrain_x: Constrain
+    constrain_y: Constrain
 
 
 RULE_NAMES = list(RulesMap.__annotations__.keys())
@@ -169,13 +203,7 @@ RULE_NAMES_SET = frozenset(RULE_NAMES)
 _rule_getter = attrgetter(*RULE_NAMES)
 
 
-class DockGroup(NamedTuple):
-    name: str
-    edge: Edge
-    z: int
-
-
-class StylesBase(ABC):
+class StylesBase:
     """A common base class for Styles and RenderStyles"""
 
     ANIMATABLE = {
@@ -191,7 +219,9 @@ class StylesBase(ABC):
         "auto_color",
         "color",
         "background",
+        "background_tint",
         "opacity",
+        "position",
         "text_opacity",
         "tint",
         "scrollbar_color",
@@ -202,88 +232,207 @@ class StylesBase(ABC):
         "scrollbar_background_active",
         "link_color",
         "link_background",
-        "link_hover_color",
-        "link_hover_background",
+        "link_color_hover",
+        "link_background_hover",
     }
 
     node: DOMNode | None = None
 
     display = StringEnumProperty(VALID_DISPLAY, "block", layout=True)
-    visibility = StringEnumProperty(VALID_VISIBILITY, "visible")
+    """Set the display of the widget, defining how it's rendered.
+
+    Valid values are "block" or "none".
+    
+    "none" will hide and allow other widgets to fill the space that this widget would occupy.
+    
+    Set to None to clear any value that was set at runtime.
+
+    Raises:
+        StyleValueError: If an invalid display is specified.
+    """
+
+    visibility = StringEnumProperty(VALID_VISIBILITY, "visible", layout=True)
+    """Set the visibility of the widget.
+    
+    Valid values are "visible" or "hidden".
+
+    "hidden" will hide the widget, but reserve the space for this widget.
+    If you want to hide the widget and allow another widget to fill the space,
+    set the display attribute to "none" instead.
+    
+    Set to None to clear any value that was set at runtime.
+
+    Raises:
+        StyleValueError: If an invalid visibility is specified.
+    """
+
     layout = LayoutProperty()
+    """Set the layout of the widget, defining how it's children are laid out.
+    
+    Valid values are "grid", "horizontal", and "vertical" or None to clear any layout
+    that was set at runtime.
+
+    Raises:
+        MissingLayout: If an invalid layout is specified.
+    """
 
     auto_color = BooleanProperty(default=False)
+    """Enable automatic picking of best contrasting color."""
     color = ColorProperty(Color(255, 255, 255))
-    background = ColorProperty(Color(0, 0, 0, 0), background=True)
+    """Set the foreground (text) color of the widget.
+    Supports `Color` objects but also strings e.g. "red" or "#ff0000".
+    You can also specify an opacity after a color e.g. "blue 10%"
+    """
+    background = ColorProperty(Color(0, 0, 0, 0))
+    """Set the background color of the widget.
+    Supports `Color` objects but also strings e.g. "red" or "#ff0000"
+    You can also specify an opacity after a color e.g. "blue 10%"
+    """
+    background_tint = ColorProperty(Color(0, 0, 0, 0))
+    """Set a color to tint (blend) with the background.
+    Supports `Color` objects but also strings e.g. "red" or "#ff0000"
+    You can also specify an opacity after a color e.g. "blue 10%"   
+    """
     text_style = StyleFlagsProperty()
-
-    opacity = FractionalProperty()
+    """Set the text style of the widget using Rich StyleFlags.
+    e.g. `"bold underline"` or `"b u strikethrough"`.
+    """
+    opacity = FractionalProperty(children=True)
+    """Set the opacity of the widget, defining how it blends with the parent."""
     text_opacity = FractionalProperty()
-
+    """Set the opacity of the content within the widget against the widget's background."""
     padding = SpacingProperty()
+    """Set the padding (spacing between border and content) of the widget."""
     margin = SpacingProperty()
+    """Set the margin (spacing outside the border) of the widget."""
     offset = OffsetProperty()
+    """Set the offset of the widget relative to where it would have been otherwise."""
+    position = StringEnumProperty(VALID_POSITION, "relative")
+    """If `relative` offset is applied to widgets current position, if `absolute` it is applied to (0, 0)."""
 
     border = BorderProperty(layout=True)
+    """Set the border of the widget e.g. ("rounded", "green") or "none"."""
+
     border_top = BoxProperty(Color(0, 255, 0))
+    """Set the top border of the widget e.g. ("rounded", "green") or "none"."""
     border_right = BoxProperty(Color(0, 255, 0))
+    """Set the right border of the widget e.g. ("rounded", "green") or "none"."""
     border_bottom = BoxProperty(Color(0, 255, 0))
+    """Set the bottom border of the widget e.g. ("rounded", "green") or "none"."""
     border_left = BoxProperty(Color(0, 255, 0))
+    """Set the left border of the widget e.g. ("rounded", "green") or "none"."""
+
+    border_title_align = StringEnumProperty(VALID_ALIGN_HORIZONTAL, "left")
+    """The alignment of the border title text."""
+    border_subtitle_align = StringEnumProperty(VALID_ALIGN_HORIZONTAL, "right")
+    """The alignment of the border subtitle text."""
 
     outline = BorderProperty(layout=False)
+    """Set the outline of the widget e.g. ("rounded", "green") or "none".
+    The outline is drawn *on top* of the widget, rather than around it like border.
+    """
     outline_top = BoxProperty(Color(0, 255, 0))
+    """Set the top outline of the widget e.g. ("rounded", "green") or "none"."""
     outline_right = BoxProperty(Color(0, 255, 0))
+    """Set the right outline of the widget e.g. ("rounded", "green") or "none"."""
     outline_bottom = BoxProperty(Color(0, 255, 0))
+    """Set the bottom outline of the widget e.g. ("rounded", "green") or "none"."""
     outline_left = BoxProperty(Color(0, 255, 0))
+    """Set the left outline of the widget e.g. ("rounded", "green") or "none"."""
+
+    keyline = KeylineProperty()
+    """Keyline parameters."""
 
     box_sizing = StringEnumProperty(VALID_BOX_SIZING, "border-box", layout=True)
+    """Box sizing method ("border-box" or "conetnt-box")"""
     width = ScalarProperty(percent_unit=Unit.WIDTH)
+    """Set the width of the widget."""
     height = ScalarProperty(percent_unit=Unit.HEIGHT)
+    """Set the height of the widget."""
     min_width = ScalarProperty(percent_unit=Unit.WIDTH, allow_auto=False)
+    """Set the minimum width of the widget."""
     min_height = ScalarProperty(percent_unit=Unit.HEIGHT, allow_auto=False)
+    """Set the minimum height of the widget."""
     max_width = ScalarProperty(percent_unit=Unit.WIDTH, allow_auto=False)
+    """Set the maximum width of the widget."""
     max_height = ScalarProperty(percent_unit=Unit.HEIGHT, allow_auto=False)
-
+    """Set the maximum height of the widget."""
     dock = DockProperty()
+    """Set which edge of the parent to dock this widget to e.g. "top", "left", "right", "bottom", "none".
+    """
+    split = SplitProperty()
 
-    overflow_x = StringEnumProperty(VALID_OVERFLOW, "hidden")
-    overflow_y = StringEnumProperty(VALID_OVERFLOW, "hidden")
+    overflow_x = OverflowProperty(VALID_OVERFLOW, "hidden")
+    """Control what happens when the content extends horizontally beyond the widget's width.
+
+    Valid values are "scroll", "hidden", or "auto".
+    """
+
+    overflow_y = OverflowProperty(VALID_OVERFLOW, "hidden")
+    """Control what happens when the content extends vertically beyond the widget's height.
+
+    Valid values are "scroll", "hidden", or "auto".
+    """
 
     layer = NameProperty()
     layers = NameListProperty()
     transitions = TransitionsProperty()
 
     tint = ColorProperty("transparent")
-    scrollbar_color = ColorProperty("ansi_bright_magenta")
-    scrollbar_color_hover = ColorProperty("ansi_yellow")
-    scrollbar_color_active = ColorProperty("ansi_bright_yellow")
+    """Set the tint of the widget. This allows you apply a opaque color above the widget.
 
-    scrollbar_corner_color = ColorProperty("#666666")
+    You can specify an opacity after a color e.g. "blue 10%"
+    """
+    scrollbar_color = ScrollbarColorProperty("ansi_bright_magenta")
+    """Set the color of the handle of the scrollbar."""
+    scrollbar_color_hover = ScrollbarColorProperty("ansi_yellow")
+    """Set the color of the handle of the scrollbar when hovered."""
+    scrollbar_color_active = ScrollbarColorProperty("ansi_bright_yellow")
+    """Set the color of the handle of the scrollbar when active (being dragged)."""
+    scrollbar_corner_color = ScrollbarColorProperty("#666666")
+    """Set the color of the space between the horizontal and vertical scrollbars."""
+    scrollbar_background = ScrollbarColorProperty("#555555")
+    """Set the background color of the scrollbar (the track that the handle sits on)."""
+    scrollbar_background_hover = ScrollbarColorProperty("#444444")
+    """Set the background color of the scrollbar when hovered."""
+    scrollbar_background_active = ScrollbarColorProperty("black")
+    """Set the background color of the scrollbar when active (being dragged)."""
 
-    scrollbar_background = ColorProperty("#555555")
-    scrollbar_background_hover = ColorProperty("#444444")
-    scrollbar_background_active = ColorProperty("black")
+    scrollbar_gutter = StringEnumProperty(
+        VALID_SCROLLBAR_GUTTER, "auto", layout=True, refresh_children=True
+    )
+    """Set to "stable" to reserve space for the scrollbar even when it's not visible.
+    This can prevent content from shifting when a scrollbar appears.
+    """
 
-    scrollbar_gutter = StringEnumProperty(VALID_SCROLLBAR_GUTTER, "auto")
-
-    scrollbar_size_vertical = IntegerProperty(default=1, layout=True)
+    scrollbar_size_vertical = IntegerProperty(default=2, layout=True)
+    """Set the width of the vertical scrollbar (measured in cells)."""
     scrollbar_size_horizontal = IntegerProperty(default=1, layout=True)
+    """Set the height of the horizontal scrollbar (measured in cells)."""
 
-    align_horizontal = StringEnumProperty(VALID_ALIGN_HORIZONTAL, "left")
-    align_vertical = StringEnumProperty(VALID_ALIGN_VERTICAL, "top")
+    align_horizontal = StringEnumProperty(
+        VALID_ALIGN_HORIZONTAL, "left", layout=True, refresh_children=True
+    )
+    align_vertical = StringEnumProperty(
+        VALID_ALIGN_VERTICAL, "top", layout=True, refresh_children=True
+    )
     align = AlignProperty()
 
     content_align_horizontal = StringEnumProperty(VALID_ALIGN_HORIZONTAL, "left")
     content_align_vertical = StringEnumProperty(VALID_ALIGN_VERTICAL, "top")
     content_align = AlignProperty()
 
-    grid_rows = ScalarListProperty()
-    grid_columns = ScalarListProperty()
+    grid_rows = ScalarListProperty(percent_unit=Unit.HEIGHT, refresh_children=True)
+    grid_columns = ScalarListProperty(percent_unit=Unit.WIDTH, refresh_children=True)
 
-    grid_size_columns = IntegerProperty(default=1, layout=True)
-    grid_size_rows = IntegerProperty(default=0, layout=True)
-    grid_gutter_horizontal = IntegerProperty(default=0, layout=True)
-    grid_gutter_vertical = IntegerProperty(default=0, layout=True)
+    grid_size_columns = IntegerProperty(default=1, layout=True, refresh_children=True)
+    grid_size_rows = IntegerProperty(default=0, layout=True, refresh_children=True)
+    grid_gutter_horizontal = IntegerProperty(
+        default=0, layout=True, refresh_children=True
+    )
+    grid_gutter_vertical = IntegerProperty(
+        default=0, layout=True, refresh_children=True
+    )
 
     row_span = IntegerProperty(default=1, layout=True)
     column_span = IntegerProperty(default=1, layout=True)
@@ -295,10 +444,34 @@ class StylesBase(ABC):
     link_background = ColorProperty("transparent")
     link_style = StyleFlagsProperty()
 
-    link_hover_color = ColorProperty("transparent")
-    auto_link_hover_color = BooleanProperty(False)
-    link_hover_background = ColorProperty("transparent")
-    link_hover_style = StyleFlagsProperty()
+    link_color_hover = ColorProperty("transparent")
+    auto_link_color_hover = BooleanProperty(False)
+    link_background_hover = ColorProperty("transparent")
+    link_style_hover = StyleFlagsProperty()
+
+    auto_border_title_color = BooleanProperty(default=False)
+    border_title_color = ColorProperty(Color(255, 255, 255, 0))
+    border_title_background = ColorProperty(Color(0, 0, 0, 0))
+    border_title_style = StyleFlagsProperty()
+
+    auto_border_subtitle_color = BooleanProperty(default=False)
+    border_subtitle_color = ColorProperty(Color(255, 255, 255, 0))
+    border_subtitle_background = ColorProperty(Color(0, 0, 0, 0))
+    border_subtitle_style = StyleFlagsProperty()
+
+    hatch = HatchProperty()
+    """Add a hatched background effect e.g. ("right", "yellow") or "none" to use no hatch.
+    """
+
+    overlay = StringEnumProperty(
+        VALID_OVERLAY, "none", layout=True, refresh_parent=True
+    )
+    constrain_x: StringEnumProperty[Constrain] = StringEnumProperty(
+        VALID_CONSTRAIN, "none"
+    )
+    constrain_y: StringEnumProperty[Constrain] = StringEnumProperty(
+        VALID_CONSTRAIN, "none"
+    )
 
     def __textual_animation__(
         self,
@@ -310,13 +483,13 @@ class StylesBase(ABC):
         speed: float | None,
         easing: EasingFunction,
         on_complete: CallbackType | None = None,
+        level: AnimationLevel = "full",
     ) -> ScalarAnimation | None:
         if self.node is None:
             return None
 
         # Check we are animating a Scalar or Scalar offset
         if isinstance(start_value, (Scalar, ScalarOffset)):
-
             # If destination is a number, we can convert that to a scalar
             if isinstance(value, (int, float)):
                 value = Scalar(value, Unit.CELLS, Unit.CELLS)
@@ -325,6 +498,9 @@ class StylesBase(ABC):
             if not isinstance(value, (Scalar, ScalarOffset)):
                 return None
 
+            from textual.widget import Widget
+
+            assert isinstance(self.node, Widget)
             return ScalarAnimation(
                 self.node,
                 self,
@@ -334,7 +510,12 @@ class StylesBase(ABC):
                 duration=duration,
                 speed=speed,
                 easing=easing,
-                on_complete=on_complete,
+                on_complete=(
+                    partial(self.node.app.call_later, on_complete)
+                    if on_complete is not None
+                    else None
+                ),
+                level=level,
             )
         return None
 
@@ -349,7 +530,7 @@ class StylesBase(ABC):
         """Get space around widget.
 
         Returns:
-            Spacing: Space around widget content.
+            Space around widget content.
         """
         return self.padding + self.border.spacing
 
@@ -357,91 +538,138 @@ class StylesBase(ABC):
     def auto_dimensions(self) -> bool:
         """Check if width or height are set to 'auto'."""
         has_rule = self.has_rule
-        return (has_rule("width") and self.width.is_auto) or (
-            has_rule("height") and self.height.is_auto
+        return (has_rule("width") and self.width.is_auto) or (  # type: ignore
+            has_rule("height") and self.height.is_auto  # type: ignore
         )
 
-    @abstractmethod
-    def has_rule(self, rule: str) -> bool:
+    @property
+    def is_relative_width(self, _relative_units={Unit.FRACTION, Unit.PERCENT}) -> bool:
+        """Does the node have a relative width?"""
+        width = self.width
+        return width is not None and width.unit in _relative_units
+
+    @property
+    def is_relative_height(self, _relative_units={Unit.FRACTION, Unit.PERCENT}) -> bool:
+        """Does the node have a relative width?"""
+        height = self.height
+        return height is not None and height.unit in _relative_units
+
+    @property
+    def is_auto_width(self, _auto=Unit.AUTO) -> bool:
+        """Does the node have automatic width?"""
+        width = self.width
+        return width is not None and width.unit == _auto
+
+    @property
+    def is_auto_height(self, _auto=Unit.AUTO) -> bool:
+        """Does the node have automatic height?"""
+        height = self.height
+        return height is not None and height.unit == _auto
+
+    @property
+    def is_dynamic_height(
+        self, _dynamic_units={Unit.AUTO, Unit.FRACTION, Unit.PERCENT}
+    ) -> bool:
+        """Does the node have a dynamic (not fixed) height?"""
+        height = self.height
+        return height is not None and height.unit in _dynamic_units
+
+    @property
+    def is_docked(self) -> bool:
+        """Is the node docked?"""
+        return self.dock != "none"
+
+    @property
+    def is_split(self) -> bool:
+        """Is the node split?"""
+        return self.split != "none"
+
+    def has_rule(self, rule_name: str) -> bool:
         """Check if a rule is set on this Styles object.
 
         Args:
-            rule (str): Rule name.
+            rule_name: Rule name.
 
         Returns:
-            bool: ``True`` if the rules is present, otherwise ``False``.
+            ``True`` if the rules is present, otherwise ``False``.
         """
+        raise NotImplementedError()
 
-    @abstractmethod
-    def clear_rule(self, rule: str) -> bool:
+    def clear_rule(self, rule_name: str) -> bool:
         """Removes the rule from the Styles object, as if it had never been set.
 
         Args:
-            rule (str): Rule name.
+            rule_name: Rule name.
 
         Returns:
-            bool: ``True`` if a rule was cleared, or ``False`` if the rule is already not set.
+            ``True`` if a rule was cleared, or ``False`` if the rule is already not set.
         """
+        raise NotImplementedError()
 
-    @abstractmethod
     def get_rules(self) -> RulesMap:
         """Get the rules in a mapping.
 
         Returns:
-            RulesMap: A TypedDict of the rules.
+            A TypedDict of the rules.
         """
+        raise NotImplementedError()
 
-    @abstractmethod
-    def set_rule(self, rule: str, value: object | None) -> bool:
+    def set_rule(self, rule_name: str, value: object | None) -> bool:
         """Set a rule.
 
         Args:
-            rule (str): Rule name.
-            value (object | None): New rule value.
+            rule_name: Rule name.
+            value: New rule value.
 
         Returns:
-            bool: ``True`` if the rule changed, otherwise ``False``.
+            ``True`` if the rule changed, otherwise ``False``.
         """
+        raise NotImplementedError()
 
-    @abstractmethod
-    def get_rule(self, rule: str, default: object = None) -> object:
+    def get_rule(self, rule_name: str, default: object = None) -> object:
         """Get an individual rule.
 
         Args:
-            rule (str): Name of rule.
-            default (object, optional): Default if rule does not exists. Defaults to None.
+            rule_name: Name of rule.
+            default: Default if rule does not exists.
 
         Returns:
-            object: Rule value or default.
+            Rule value or default.
         """
+        raise NotImplementedError()
 
-    @abstractmethod
-    def refresh(self, *, layout: bool = False, children: bool = False) -> None:
+    def refresh(
+        self,
+        *,
+        layout: bool = False,
+        children: bool = False,
+        parent: bool = False,
+        repaint: bool = True,
+    ) -> None:
         """Mark the styles as requiring a refresh.
 
         Args:
-            layout (bool, optional): Also require a layout. Defaults to False.
-            children (bool, opional): Also refresh children. Defaults to False.
+            layout: Also require a layout.
+            children: Also refresh children.
+            parent: Also refresh the parent.
+            repaint: Repaint the widgets.
         """
 
-    @abstractmethod
     def reset(self) -> None:
         """Reset the rules to initial state."""
 
-    @abstractmethod
     def merge(self, other: StylesBase) -> None:
         """Merge values from another Styles.
 
         Args:
-            other (Styles): A Styles object.
+            other: A Styles object.
         """
 
-    @abstractmethod
     def merge_rules(self, rules: RulesMap) -> None:
-        """Merge rules in to Styles.
+        """Merge rules into Styles.
 
         Args:
-            rules (RulesMap): A mapping of rules.
+            rules: A mapping of rules.
         """
 
     def get_render_rules(self) -> RulesMap:
@@ -455,29 +683,30 @@ class StylesBase(ABC):
         """Check if a given rule may be animated.
 
         Args:
-            rule (str): Name of the rule.
+            rule: Name of the rule.
 
         Returns:
-            bool: ``True`` if the rule may be animated, otherwise ``False``.
+            ``True`` if the rule may be animated, otherwise ``False``.
         """
         return rule in cls.ANIMATABLE
 
     @classmethod
-    @lru_cache(maxsize=1024)
-    def parse(cls, css: str, path: str, *, node: DOMNode = None) -> Styles:
+    def parse(
+        cls, css: str, read_from: CSSLocation, *, node: DOMNode | None = None
+    ) -> Styles:
         """Parse CSS and return a Styles object.
 
         Args:
-            css (str): Textual CSS.
-            path (str): Path or string indicating source of CSS.
-            node (DOMNode, optional): Node to associate with the Styles. Defaults to None.
+            css: Textual CSS.
+            read_from: Location where the CSS was read from.
+            node: Node to associate with the Styles.
 
         Returns:
-            Styles: A Styles instance containing result of parsing CSS.
+            A Styles instance containing result of parsing CSS.
         """
-        from .parse import parse_declarations
+        from textual.css.parse import parse_declarations
 
-        styles = parse_declarations(css, path)
+        styles = parse_declarations(css, read_from)
         styles.node = node
         return styles
 
@@ -485,10 +714,10 @@ class StylesBase(ABC):
         """Get a transition.
 
         Args:
-            key (str): Transition key.
+            key: Transition key.
 
         Returns:
-            Transition | None: Transition object or None it no transition exists.
+            Transition object or None it no transition exists.
         """
         if key in self.ANIMATABLE:
             return self.transitions.get(key, None)
@@ -499,11 +728,11 @@ class StylesBase(ABC):
         """Align the width dimension.
 
         Args:
-            width (int): Width of the content.
-            parent_width (int): Width of the parent container.
+            width: Width of the content.
+            parent_width: Width of the parent container.
 
         Returns:
-            int: An offset to add to the X coordinate.
+            An offset to add to the X coordinate.
         """
         offset_x = 0
         align_horizontal = self.align_horizontal
@@ -512,17 +741,18 @@ class StylesBase(ABC):
                 offset_x = (parent_width - width) // 2
             else:
                 offset_x = parent_width - width
+
         return offset_x
 
     def _align_height(self, height: int, parent_height: int) -> int:
         """Align the height dimensions
 
         Args:
-            height (int): Height of the content.
-            parent_height (int): Height of the parent container.
+            height: Height of the content.
+            parent_height: Height of the parent container.
 
         Returns:
-            int: An offset to add to the Y coordinate.
+            An offset to add to the Y coordinate.
         """
         offset_y = 0
         align_vertical = self.align_vertical
@@ -537,11 +767,11 @@ class StylesBase(ABC):
         """Align a size according to alignment rules.
 
         Args:
-            child (tuple[int, int]): The size of the child (width, height)
-            parent (tuple[int, int]): The size of the parent (width, height)
+            child: The size of the child (width, height)
+            parent: The size of the parent (width, height)
 
         Returns:
-            Offset: Offset required to align the child.
+            Offset required to align the child.
         """
         width, height = child
         parent_width, parent_height = parent
@@ -555,12 +785,18 @@ class StylesBase(ABC):
         """Get the style properties associated with this node only (not including parents in the DOM).
 
         Returns:
-            Style: Rich Style object.
+            Rich Style object.
         """
         style = Style(
-            color=(self.color.rich_color if self.has_rule("color") else None),
+            color=(
+                self.color.rich_color
+                if self.has_rule("color") and self.color.a > 0
+                else None
+            ),
             bgcolor=(
-                self.background.rich_color if self.has_rule("background") else None
+                self.background.rich_color
+                if self.has_rule("background") and self.background.a > 0
+                else None
             ),
         )
         style += self.text_style
@@ -571,29 +807,33 @@ class StylesBase(ABC):
 @dataclass
 class Styles(StylesBase):
     node: DOMNode | None = None
-    _rules: RulesMap = field(default_factory=dict)
+    _rules: RulesMap = field(default_factory=RulesMap)
     _updates: int = 0
 
     important: set[str] = field(default_factory=set)
 
+    def __post_init__(self) -> None:
+        self.get_rule: Callable[[str, object], object] = self._rules.get  # type: ignore[assignment]
+        self.has_rule: Callable[[str], bool] = self._rules.__contains__  # type: ignore[assignment]
+
     def copy(self) -> Styles:
         """Get a copy of this Styles object."""
-        return Styles(node=self.node, _rules=self.get_rules(), important=self.important)
+        return Styles(
+            node=self.node,
+            _rules=self.get_rules(),
+            important=self.important,
+        )
 
-    def has_rule(self, rule: str) -> bool:
-        assert rule in RULE_NAMES_SET, f"no such rule {rule!r}"
-        return rule in self._rules
-
-    def clear_rule(self, rule: str) -> bool:
+    def clear_rule(self, rule_name: str) -> bool:
         """Removes the rule from the Styles object, as if it had never been set.
 
         Args:
-            rule (str): Rule name.
+            rule_name: Rule name.
 
         Returns:
-            bool: ``True`` if a rule was cleared, or ``False`` if it was already not set.
+            ``True`` if a rule was cleared, or ``False`` if it was already not set.
         """
-        changed = self._rules.pop(rule, None) is not None
+        changed = self._rules.pop(rule_name, None) is not None  # type: ignore
         if changed:
             self._updates += 1
         return changed
@@ -605,47 +845,55 @@ class Styles(StylesBase):
         """Set a rule.
 
         Args:
-            rule (str): Rule name.
-            value (object | None): New rule value.
+            rule: Rule name.
+            value: New rule value.
 
         Returns:
-            bool: ``True`` if the rule changed, otherwise ``False``.
+            ``True`` if the rule changed, otherwise ``False``.
         """
         if value is None:
-            changed = self._rules.pop(rule, None) is not None
+            changed = self._rules.pop(rule, None) is not None  # type: ignore
             if changed:
                 self._updates += 1
             return changed
         current = self._rules.get(rule)
-        self._rules[rule] = value
+        self._rules[rule] = value  # type: ignore
         changed = current != value
         if changed:
             self._updates += 1
         return changed
 
-    def get_rule(self, rule: str, default: object = None) -> object:
-        return self._rules.get(rule, default)
-
-    def refresh(self, *, layout: bool = False, children: bool = False) -> None:
-        if self.node is not None:
-            self.node.refresh(layout=layout)
-            if children:
-                for child in self.node.walk_children(with_self=False, reverse=True):
-                    child.refresh(layout=layout)
+    def refresh(
+        self,
+        *,
+        layout: bool = False,
+        children: bool = False,
+        parent: bool = False,
+        repaint=True,
+    ) -> None:
+        node = self.node
+        if node is None or not node._is_mounted:
+            return
+        if parent and node._parent is not None:
+            node._parent.refresh(repaint=repaint)
+        node.refresh(layout=layout)
+        if children:
+            for child in node.walk_children(with_self=False, reverse=True):
+                child.refresh(layout=layout, repaint=repaint)
 
     def reset(self) -> None:
         """Reset the rules to initial state."""
         self._updates += 1
-        self._rules.clear()
+        self._rules.clear()  # type: ignore
 
-    def merge(self, other: Styles) -> None:
+    def merge(self, other: StylesBase) -> None:
         """Merge values from another Styles.
 
         Args:
-            other (Styles): A Styles object.
+            other: A Styles object.
         """
         self._updates += 1
-        self._rules.update(other._rules)
+        self._rules.update(other.get_rules())
 
     def merge_rules(self, rules: RulesMap) -> None:
         self._updates += 1
@@ -661,19 +909,20 @@ class Styles(StylesBase):
         well as higher specificity of user CSS vs widget CSS.
 
         Args:
-            specificity (Specificity3): A node specificity.
-            is_default_rules (bool): True if the rules we're extracting are
+            specificity: A node specificity.
+            is_default_rules: True if the rules we're extracting are
                 default (i.e. in Widget.DEFAULT_CSS) rules. False if they're from user defined CSS.
 
         Returns:
-            list[tuple[str, Specificity6, Any]]]: A list containing a tuple of <RULE NAME>, <SPECIFICITY> <RULE VALUE>.
+            A list containing a tuple of <RULE NAME>, <SPECIFICITY> <RULE VALUE>.
         """
         is_important = self.important.__contains__
-        rules = [
+        default_rules = 0 if is_default_rules else 1
+        rules: list[tuple[str, Specificity6, Any]] = [
             (
                 rule_name,
                 (
-                    0 if is_default_rules else 1,
+                    default_rules,
                     1 if is_important(rule_name) else 0,
                     *specificity,
                     tie_breaker,
@@ -682,6 +931,7 @@ class Styles(StylesBase):
             )
             for rule_name, rule_value in self._rules.items()
         ]
+
         return rules
 
     def __rich_repr__(self) -> rich.repr.Result:
@@ -698,12 +948,11 @@ class Styles(StylesBase):
         """Get pairs of strings containing <RULE NAME>, <RULE VALUE> for border css declarations.
 
         Args:
-            rules (RulesMap): A rules map.
-            name (str): Name of rules (border or outline)
+            rules: A rules map.
+            name: Name of rules (border or outline)
 
         Returns:
-            Iterable[tuple[str, str]]: An iterable of CSS declarations.
-
+            An iterable of CSS declarations.
         """
 
         has_rule = rules.__contains__
@@ -726,25 +975,25 @@ class Styles(StylesBase):
             left = get_rule(f"{name}_left")
 
             if top == right and right == bottom and bottom == left:
-                border_type, border_color = rules[f"{name}_top"]
+                border_type, border_color = rules[f"{name}_top"]  # type: ignore
                 yield name, f"{border_type} {border_color.hex}"
                 return
 
         # Check for edges
         if has_top:
-            border_type, border_color = rules[f"{name}_top"]
+            border_type, border_color = rules[f"{name}_top"]  # type: ignore
             yield f"{name}-top", f"{border_type} {border_color.hex}"
 
         if has_right:
-            border_type, border_color = rules[f"{name}_right"]
+            border_type, border_color = rules[f"{name}_right"]  # type: ignore
             yield f"{name}-right", f"{border_type} {border_color.hex}"
 
         if has_bottom:
-            border_type, border_color = rules[f"{name}_bottom"]
+            border_type, border_color = rules[f"{name}_bottom"]  # type: ignore
             yield f"{name}-bottom", f"{border_type} {border_color.hex}"
 
         if has_left:
-            border_type, border_color = rules[f"{name}_left"]
+            border_type, border_color = rules[f"{name}_left"]  # type: ignore
             yield f"{name}-left", f"{border_type} {border_color.hex}"
 
     @property
@@ -760,15 +1009,14 @@ class Styles(StylesBase):
 
         rules = self.get_rules()
         get_rule = rules.get
-        has_rule = rules.__contains__
 
-        if has_rule("display"):
+        if "display" in rules:
             append_declaration("display", rules["display"])
-        if has_rule("visibility"):
+        if "visibility" in rules:
             append_declaration("visibility", rules["visibility"])
-        if has_rule("padding"):
+        if "padding" in rules:
             append_declaration("padding", rules["padding"].css)
-        if has_rule("margin"):
+        if "margin" in rules:
             append_declaration("margin", rules["margin"].css)
 
         for name, rule in self._get_border_css_lines(rules, "border"):
@@ -777,90 +1025,96 @@ class Styles(StylesBase):
         for name, rule in self._get_border_css_lines(rules, "outline"):
             append_declaration(name, rule)
 
-        if has_rule("offset"):
+        if "offset" in rules:
             x, y = self.offset
             append_declaration("offset", f"{x} {y}")
-        if has_rule("dock"):
+        if "position" in rules:
+            append_declaration("position", self.position)
+        if "dock" in rules:
             append_declaration("dock", rules["dock"])
-        if has_rule("layers"):
+        if "split" in rules:
+            append_declaration("split", rules["split"])
+        if "layers" in rules:
             append_declaration("layers", " ".join(self.layers))
-        if has_rule("layer"):
+        if "layer" in rules:
             append_declaration("layer", self.layer)
-        if has_rule("layout"):
+        if "layout" in rules:
             assert self.layout is not None
             append_declaration("layout", self.layout.name)
 
-        if has_rule("color"):
+        if "color" in rules:
             append_declaration("color", self.color.hex)
-        if has_rule("background"):
+        if "background" in rules:
             append_declaration("background", self.background.hex)
-        if has_rule("text_style"):
+        if "background_tint" in rules:
+            append_declaration("background-tint", self.background_tint.hex)
+        if "text_style" in rules:
             append_declaration("text-style", str(get_rule("text_style")))
-        if has_rule("tint"):
+        if "tint" in rules:
             append_declaration("tint", self.tint.css)
 
-        if has_rule("overflow_x"):
+        if "overflow_x" in rules:
             append_declaration("overflow-x", self.overflow_x)
-        if has_rule("overflow_y"):
+        if "overflow_y" in rules:
             append_declaration("overflow-y", self.overflow_y)
 
-        if has_rule("scrollbar_color"):
+        if "scrollbar_color" in rules:
             append_declaration("scrollbar-color", self.scrollbar_color.css)
-        if has_rule("scrollbar_color_hover"):
+        if "scrollbar_color_hover" in rules:
             append_declaration("scrollbar-color-hover", self.scrollbar_color_hover.css)
-        if has_rule("scrollbar_color_active"):
+        if "scrollbar_color_active" in rules:
             append_declaration(
                 "scrollbar-color-active", self.scrollbar_color_active.css
             )
 
-        if has_rule("scrollbar_corner_color"):
+        if "scrollbar_corner_color" in rules:
             append_declaration(
                 "scrollbar-corner-color", self.scrollbar_corner_color.css
             )
 
-        if has_rule("scrollbar_background"):
+        if "scrollbar_background" in rules:
             append_declaration("scrollbar-background", self.scrollbar_background.css)
-        if has_rule("scrollbar_background_hover"):
+        if "scrollbar_background_hover" in rules:
             append_declaration(
                 "scrollbar-background-hover", self.scrollbar_background_hover.css
             )
-        if has_rule("scrollbar_background_active"):
+        if "scrollbar_background_active" in rules:
             append_declaration(
                 "scrollbar-background-active", self.scrollbar_background_active.css
             )
 
-        if has_rule("scrollbar_gutter"):
+        if "scrollbar_gutter" in rules:
             append_declaration("scrollbar-gutter", self.scrollbar_gutter)
-        if has_rule("scrollbar_size"):
+        if "scrollbar_size" in rules:
             append_declaration(
                 "scrollbar-size",
                 f"{self.scrollbar_size_horizontal} {self.scrollbar_size_vertical}",
             )
         else:
-            if has_rule("scrollbar_size_horizontal"):
+            if "scrollbar_size_horizontal" in rules:
                 append_declaration(
                     "scrollbar-size-horizontal", str(self.scrollbar_size_horizontal)
                 )
-            if has_rule("scrollbar_size_vertical"):
+            if "scrollbar_size_vertical" in rules:
                 append_declaration(
                     "scrollbar-size-vertical", str(self.scrollbar_size_vertical)
                 )
 
-        if has_rule("box_sizing"):
+        if "box_sizing" in rules:
             append_declaration("box-sizing", self.box_sizing)
-        if has_rule("width"):
+        if "width" in rules:
             append_declaration("width", str(self.width))
-        if has_rule("height"):
+        if "height" in rules:
             append_declaration("height", str(self.height))
-        if has_rule("min_width"):
+        if "min_width" in rules:
             append_declaration("min-width", str(self.min_width))
-        if has_rule("min_height"):
+        if "min_height" in rules:
             append_declaration("min-height", str(self.min_height))
-        if has_rule("max_width"):
+        if "max_width" in rules:
             append_declaration("max-width", str(self.min_width))
-        if has_rule("max_height"):
+        if "max_height" in rules:
             append_declaration("max-height", str(self.min_height))
-        if has_rule("transitions"):
+        if "transitions" in rules:
             append_declaration(
                 "transition",
                 ", ".join(
@@ -869,76 +1123,117 @@ class Styles(StylesBase):
                 ),
             )
 
-        if has_rule("align_horizontal") and has_rule("align_vertical"):
+        if "align_horizontal" in rules and "align_vertical" in rules:
             append_declaration(
                 "align", f"{self.align_horizontal} {self.align_vertical}"
             )
-        elif has_rule("align_horizontal"):
+        elif "align_horizontal" in rules:
             append_declaration("align-horizontal", self.align_horizontal)
-        elif has_rule("align_vertical"):
+        elif "align_vertical" in rules:
             append_declaration("align-vertical", self.align_vertical)
 
-        if has_rule("content_align_horizontal") and has_rule("content_align_vertical"):
+        if "content_align_horizontal" in rules and "content_align_vertical" in rules:
             append_declaration(
                 "content-align",
                 f"{self.content_align_horizontal} {self.content_align_vertical}",
             )
-        elif has_rule("content_align_horizontal"):
+        elif "content_align_horizontal" in rules:
             append_declaration(
                 "content-align-horizontal", self.content_align_horizontal
             )
-        elif has_rule("content_align_vertical"):
+        elif "content_align_vertical" in rules:
             append_declaration("content-align-vertical", self.content_align_vertical)
 
-        if has_rule("text_align"):
+        if "text_align" in rules:
             append_declaration("text-align", self.text_align)
 
-        if has_rule("opacity"):
+        if "border_title_align" in rules:
+            append_declaration("border-title-align", self.border_title_align)
+        if "border_subtitle_align" in rules:
+            append_declaration("border-subtitle-align", self.border_subtitle_align)
+
+        if "opacity" in rules:
             append_declaration("opacity", str(self.opacity))
-        if has_rule("text_opacity"):
+        if "text_opacity" in rules:
             append_declaration("text-opacity", str(self.text_opacity))
 
-        if has_rule("grid_columns"):
+        if "grid_columns" in rules:
             append_declaration(
                 "grid-columns",
                 " ".join(str(scalar) for scalar in self.grid_columns or ()),
             )
-        if has_rule("grid_rows"):
+        if "grid_rows" in rules:
             append_declaration(
                 "grid-rows",
                 " ".join(str(scalar) for scalar in self.grid_rows or ()),
             )
-        if has_rule("grid_size_columns"):
+        if "grid_size_columns" in rules:
             append_declaration("grid-size-columns", str(self.grid_size_columns))
-        if has_rule("grid_size_rows"):
+        if "grid_size_rows" in rules:
             append_declaration("grid-size-rows", str(self.grid_size_rows))
 
-        if has_rule("grid_gutter_horizontal"):
+        if "grid_gutter_horizontal" in rules:
             append_declaration(
                 "grid-gutter-horizontal", str(self.grid_gutter_horizontal)
             )
-        if has_rule("grid_gutter_vertical"):
+        if "grid_gutter_vertical" in rules:
             append_declaration("grid-gutter-vertical", str(self.grid_gutter_vertical))
 
-        if has_rule("row_span"):
+        if "row_span" in rules:
             append_declaration("row-span", str(self.row_span))
-        if has_rule("column_span"):
+        if "column_span" in rules:
             append_declaration("column-span", str(self.column_span))
 
-        if has_rule("link_color"):
+        if "link_color" in rules:
             append_declaration("link-color", self.link_color.css)
-        if has_rule("link_background"):
+        if "link_background" in rules:
             append_declaration("link-background", self.link_background.css)
-        if has_rule("link_style"):
+        if "link_style" in rules:
             append_declaration("link-style", str(self.link_style))
 
-        if has_rule("link_hover_color"):
-            append_declaration("link-hover-color", self.link_hover_color.css)
-        if has_rule("link_hover_background"):
-            append_declaration("link-hover-background", self.link_hover_background.css)
-        if has_rule("link_hover_style"):
-            append_declaration("link-hover-style", str(self.link_hover_style))
+        if "link_color_hover" in rules:
+            append_declaration("link-color-hover", self.link_color_hover.css)
+        if "link_background_hover" in rules:
+            append_declaration("link-background-hover", self.link_background_hover.css)
+        if "link_style_hover" in rules:
+            append_declaration("link-style-hover", str(self.link_style_hover))
 
+        if "border_title_color" in rules:
+            append_declaration("title-color", self.border_title_color.css)
+        if "border_title_background" in rules:
+            append_declaration("title-background", self.border_title_background.css)
+        if "border_title_style" in rules:
+            append_declaration("title-text-style", str(self.border_title_style))
+
+        if "border_subtitle_color" in rules:
+            append_declaration("subtitle-color", self.border_subtitle_color.css)
+        if "border_subtitle_background" in rules:
+            append_declaration(
+                "subtitle-background", self.border_subtitle_background.css
+            )
+        if "border_subtitle_text_style" in rules:
+            append_declaration("subtitle-text-style", str(self.border_subtitle_style))
+        if "overlay" in rules:
+            append_declaration("overlay", str(self.overlay))
+        if "constrain_x" in rules and "constrain_y" in rules:
+            if self.constrain_x == self.constrain_y:
+                append_declaration("constrain", self.constrain_x)
+            else:
+                append_declaration(
+                    "constrain", f"{self.constrain_x} {self.constrain_y}"
+                )
+        elif "constrain_x" in rules:
+            append_declaration("constrain-x", self.constrain_x)
+        elif "constrain_y" in rules:
+            append_declaration("constrain-y", self.constrain_y)
+
+        if "keyline" in rules:
+            keyline_type, keyline_color = self.keyline
+            if keyline_type != "none":
+                append_declaration("keyline", f"{keyline_type}, {keyline_color.css}")
+        if "hatch" in rules:
+            hatch_character, hatch_color = self.hatch
+            append_declaration("hatch", f'"{hatch_character}" {hatch_color.css}')
         lines.sort()
         return lines
 
@@ -960,12 +1255,20 @@ class RenderStyles(StylesBase):
         self._rich_style: tuple[int, Style] | None = None
         self._gutter: tuple[int, Spacing] | None = None
 
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, RenderStyles):
+            return (
+                self._base_styles._rules == other._base_styles._rules
+                and self._inline_styles._rules == other._inline_styles._rules
+            )
+        return NotImplemented
+
     @property
     def _cache_key(self) -> int:
-        """A key key, that changes when any style is changed.
+        """A cache key, that changes when any style is changed.
 
         Returns:
-            int: An opaque integer.
+            An opaque integer.
         """
         return self._updates + self._base_styles._updates + self._inline_styles._updates
 
@@ -990,7 +1293,7 @@ class RenderStyles(StylesBase):
         """Get space around widget.
 
         Returns:
-            Spacing: Space around widget content.
+            Space around widget content.
         """
         # This is (surprisingly) a bit of a bottleneck
         if self._gutter is not None:
@@ -1012,19 +1315,20 @@ class RenderStyles(StylesBase):
         delay: float = 0.0,
         easing: EasingFunction | str = DEFAULT_EASING,
         on_complete: CallbackType | None = None,
+        level: AnimationLevel = "full",
     ) -> None:
         """Animate an attribute.
 
         Args:
-            attribute (str): Name of the attribute to animate.
-            value (float | Animatable): The value to animate to.
-            final_value (object, optional): The final value of the animation. Defaults to `value` if not set.
-            duration (float | None, optional): The duration of the animate. Defaults to None.
-            speed (float | None, optional): The speed of the animation. Defaults to None.
-            delay (float, optional): A delay (in seconds) before the animation starts. Defaults to 0.0.
-            easing (EasingFunction | str, optional): An easing method. Defaults to "in_out_cubic".
-            on_complete (CallbackType | None, optional): A callable to invoke when the animation is finished. Defaults to None.
-
+            attribute: Name of the attribute to animate.
+            value: The value to animate to.
+            final_value: The final value of the animation. Defaults to `value` if not set.
+            duration: The duration (in seconds) of the animation.
+            speed: The speed of the animation.
+            delay: A delay (in seconds) before the animation starts.
+            easing: An easing method.
+            on_complete: A callable to invoke when the animation is finished.
+            level: Minimum level required for the animation to take place (inclusive).
         """
         if self._animate is None:
             assert self.node is not None
@@ -1039,21 +1343,32 @@ class RenderStyles(StylesBase):
             delay=delay,
             easing=easing,
             on_complete=on_complete,
+            level=level,
         )
 
     def __rich_repr__(self) -> rich.repr.Result:
+        yield self.node
         for rule_name in RULE_NAMES:
             if self.has_rule(rule_name):
                 yield rule_name, getattr(self, rule_name)
 
-    def refresh(self, *, layout: bool = False, children: bool = False) -> None:
-        self._inline_styles.refresh(layout=layout, children=children)
+    def refresh(
+        self,
+        *,
+        layout: bool = False,
+        children: bool = False,
+        parent: bool = False,
+        repaint: bool = True,
+    ) -> None:
+        self._inline_styles.refresh(
+            layout=layout, children=children, parent=parent, repaint=repaint
+        )
 
-    def merge(self, other: Styles) -> None:
+    def merge(self, other: StylesBase) -> None:
         """Merge values from another Styles.
 
         Args:
-            other (Styles): A Styles object.
+            other: A Styles object.
         """
         self._inline_styles.merge(other)
 
@@ -1066,18 +1381,33 @@ class RenderStyles(StylesBase):
         self._inline_styles.reset()
         self._updates += 1
 
-    def has_rule(self, rule: str) -> bool:
+    def has_rule(self, rule_name: str) -> bool:
         """Check if a rule has been set."""
-        return self._inline_styles.has_rule(rule) or self._base_styles.has_rule(rule)
+        return self._inline_styles.has_rule(rule_name) or self._base_styles.has_rule(
+            rule_name
+        )
 
-    def set_rule(self, rule: str, value: object | None) -> bool:
+    def has_any_rules(self, *rule_names: str) -> bool:
+        """Check if any of the supplied rules have been set.
+
+        Args:
+            rule_names: Number of rules.
+
+        Returns:
+            `True` if any of the supplied rules have been set, `False` if none have.
+        """
+        inline_has_rule = self._inline_styles.has_rule
+        base_has_rule = self._base_styles.has_rule
+        return any(inline_has_rule(name) or base_has_rule(name) for name in rule_names)
+
+    def set_rule(self, rule_name: str, value: object | None) -> bool:
         self._updates += 1
-        return self._inline_styles.set_rule(rule, value)
+        return self._inline_styles.set_rule(rule_name, value)
 
-    def get_rule(self, rule: str, default: object = None) -> object:
-        if self._inline_styles.has_rule(rule):
-            return self._inline_styles.get_rule(rule, default)
-        return self._base_styles.get_rule(rule, default)
+    def get_rule(self, rule_name: str, default: object = None) -> object:
+        if self._inline_styles.has_rule(rule_name):
+            return self._inline_styles.get_rule(rule_name, default)
+        return self._base_styles.get_rule(rule_name, default)
 
     def clear_rule(self, rule_name: str) -> bool:
         """Clear a rule (from inline)."""

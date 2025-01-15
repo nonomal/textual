@@ -1,15 +1,28 @@
+"""Provides a Textual placeholder widget; useful when designing an app's layout."""
+
 from __future__ import annotations
 
 from itertools import cycle
+from typing import TYPE_CHECKING, Iterator
+from weakref import WeakKeyDictionary
 
-from .. import events
-from ..containers import Container
-from ..css._error_tools import friendly_list
-from ..reactive import Reactive, reactive
-from ..widget import Widget, RenderResult
-from .._typing import Literal
+from typing_extensions import Literal, Self
+
+from textual import events
+
+if TYPE_CHECKING:
+    from textual.app import RenderResult
+
+from textual.css._error_tools import friendly_list
+from textual.reactive import Reactive, reactive
+from textual.widget import Widget
+
+if TYPE_CHECKING:
+    from textual.app import App
 
 PlaceholderVariant = Literal["default", "size", "text"]
+"""The different variants of placeholder."""
+
 _VALID_PLACEHOLDER_VARIANTS_ORDERED: list[PlaceholderVariant] = [
     "default",
     "size",
@@ -36,19 +49,10 @@ _LOREM_IPSUM_PLACEHOLDER_TEXT = "Lorem ipsum dolor sit amet, consectetur adipisc
 
 
 class InvalidPlaceholderVariant(Exception):
-    pass
+    """Raised when an invalid Placeholder variant is set."""
 
 
-class _PlaceholderLabel(Widget):
-    def __init__(self, content, classes) -> None:
-        super().__init__(classes=classes)
-        self._content = content
-
-    def render(self) -> RenderResult:
-        return self._content
-
-
-class Placeholder(Container):
+class Placeholder(Widget):
     """A simple placeholder widget to use before you build your custom widgets.
 
     This placeholder has a couple of variants that show different data.
@@ -56,55 +60,36 @@ class Placeholder(Container):
     can also be initialised in a specific variant.
 
     The variants available are:
-        default: shows an identifier label or the ID of the placeholder.
-        size: shows the size of the placeholder.
-        text: shows some Lorem Ipsum text on the placeholder.
+
+    | Variant | Placeholder shows                              |
+    |---------|------------------------------------------------|
+    | default | Identifier label or the ID of the placeholder. |
+    | size    | Size of the placeholder.                       |
+    | text    | Lorem Ipsum text.                              |
     """
 
     DEFAULT_CSS = """
     Placeholder {
-        align: center middle;
+        content-align: center middle;
         overflow: hidden;
-    }
+        color: $text;
 
+        &:disabled {
+            opacity: 0.7;
+        }
+    }
     Placeholder.-text {
         padding: 1;
     }
-
-    _PlaceholderLabel {
-        height: auto;
-        color: $text;
-    }
-
-    Placeholder > _PlaceholderLabel {
-        content-align: center middle;
-    }
-
-    Placeholder.-default > _PlaceholderLabel.-size,
-    Placeholder.-default > _PlaceholderLabel.-text,
-    Placeholder.-size    > _PlaceholderLabel.-default,
-    Placeholder.-size    > _PlaceholderLabel.-text,
-    Placeholder.-text    > _PlaceholderLabel.-default,
-    Placeholder.-text    > _PlaceholderLabel.-size {
-        display: none;
-    }
-
-    Placeholder.-default > _PlaceholderLabel.-default,
-    Placeholder.-size    > _PlaceholderLabel.-size,
-    Placeholder.-text    > _PlaceholderLabel.-text {
-        display: block;
-    }
     """
+
     # Consecutive placeholders get assigned consecutive colors.
-    _COLORS = cycle(_PLACEHOLDER_BACKGROUND_COLORS)
+    _COLORS: WeakKeyDictionary[App, Iterator[str]] = WeakKeyDictionary()
     _SIZE_RENDER_TEMPLATE = "[b]{} x {}[/b]"
 
-    variant: Reactive[PlaceholderVariant] = reactive("default")
+    variant: Reactive[PlaceholderVariant] = reactive[PlaceholderVariant]("default")
 
-    @classmethod
-    def reset_color_cycle(cls) -> None:
-        """Reset the placeholder background color cycle."""
-        cls._COLORS = cycle(_PLACEHOLDER_BACKGROUND_COLORS)
+    _renderables: dict[PlaceholderVariant, str]
 
     def __init__(
         self,
@@ -114,53 +99,60 @@ class Placeholder(Container):
         name: str | None = None,
         id: str | None = None,
         classes: str | None = None,
+        disabled: bool = False,
     ) -> None:
         """Create a Placeholder widget.
 
         Args:
-            label (str | None, optional): The label to identify the placeholder.
-                If no label is present, uses the placeholder ID instead. Defaults to None.
-            variant (PlaceholderVariant, optional): The variant of the placeholder.
-                Defaults to "default".
-            name (str | None, optional): The name of the placeholder. Defaults to None.
-            id (str | None, optional): The ID of the placeholder in the DOM.
-                Defaults to None.
-            classes (str | None, optional): A space separated string with the CSS classes
-                of the placeholder, if any. Defaults to None.
+            label: The label to identify the placeholder.
+                If no label is present, uses the placeholder ID instead.
+            variant: The variant of the placeholder.
+            name: The name of the placeholder.
+            id: The ID of the placeholder in the DOM.
+            classes: A space separated string with the CSS classes
+                of the placeholder, if any.
+            disabled: Whether the placeholder is disabled or not.
         """
-        # Create and cache labels for all the variants.
-        self._default_label = _PlaceholderLabel(
-            label if label else f"#{id}" if id else "Placeholder",
-            "-default",
-        )
-        self._size_label = _PlaceholderLabel(
-            "",
-            "-size",
-        )
-        self._text_label = _PlaceholderLabel(
-            "\n\n".join(_LOREM_IPSUM_PLACEHOLDER_TEXT for _ in range(5)),
-            "-text",
-        )
-        super().__init__(
-            self._default_label,
-            self._size_label,
-            self._text_label,
-            name=name,
-            id=id,
-            classes=classes,
-        )
+        # Create and cache renderables for all the variants.
+        self._renderables = {
+            "default": label if label else f"#{id}" if id else "Placeholder",
+            "size": "",
+            "text": "\n\n".join(_LOREM_IPSUM_PLACEHOLDER_TEXT for _ in range(5)),
+        }
 
-        self.styles.background = f"{next(Placeholder._COLORS)} 50%"
+        super().__init__(name=name, id=id, classes=classes, disabled=disabled)
 
         self.variant = self.validate_variant(variant)
+        """The current variant of the placeholder."""
+
         # Set a cycle through the variants with the correct starting point.
         self._variants_cycle = cycle(_VALID_PLACEHOLDER_VARIANTS_ORDERED)
         while next(self._variants_cycle) != self.variant:
             pass
 
-    def cycle_variant(self) -> None:
-        """Get the next variant in the cycle."""
+    async def _on_compose(self, event: events.Compose) -> None:
+        """Set the color for this placeholder."""
+        colors = Placeholder._COLORS.setdefault(
+            self.app, cycle(_PLACEHOLDER_BACKGROUND_COLORS)
+        )
+        self.styles.background = f"{next(colors)} 50%"
+
+    def render(self) -> RenderResult:
+        """Render the placeholder.
+
+        Returns:
+            The value to render.
+        """
+        return self._renderables[self.variant]
+
+    def cycle_variant(self) -> Self:
+        """Get the next variant in the cycle.
+
+        Returns:
+            The `Placeholder` instance.
+        """
         self.variant = next(self._variants_cycle)
+        return self
 
     def watch_variant(
         self, old_variant: PlaceholderVariant, variant: PlaceholderVariant
@@ -177,12 +169,12 @@ class Placeholder(Container):
             )
         return variant
 
-    def on_click(self) -> None:
+    async def _on_click(self, _: events.Click) -> None:
         """Click handler to cycle through the placeholder variants."""
         self.cycle_variant()
 
-    def on_resize(self, event: events.Resize) -> None:
+    def _on_resize(self, event: events.Resize) -> None:
         """Update the placeholder "size" variant with the new placeholder size."""
-        self._size_label._content = self._SIZE_RENDER_TEMPLATE.format(*self.size)
+        self._renderables["size"] = self._SIZE_RENDER_TEMPLATE.format(*event.size)
         if self.variant == "size":
-            self._size_label.refresh(layout=True)
+            self.refresh()

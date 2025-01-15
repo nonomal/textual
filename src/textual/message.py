@@ -1,57 +1,63 @@
+"""
+
+The base class for all messages (including events).
+"""
+
 from __future__ import annotations
 
-from typing import ClassVar, TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 import rich.repr
+from typing_extensions import Self
 
-from . import _clock
-from .case import camel_to_snake
-from ._types import MessageTarget as MessageTarget
+from textual import _time
+from textual._context import active_message_pump
+from textual.case import camel_to_snake
 
 if TYPE_CHECKING:
-    from .widget import Widget
-    from .message_pump import MessagePump
+    from textual.dom import DOMNode
+    from textual.message_pump import MessagePump
 
 
 @rich.repr.auto
 class Message:
-    """Base class for a message.
-
-    Args:
-        sender (MessageTarget): The sender of the message / event.
-
-    """
+    """Base class for a message."""
 
     __slots__ = [
-        "sender",
-        "name",
+        "_sender",
         "time",
         "_forwarded",
         "_no_default_action",
         "_stop_propagation",
-        "_handler_name",
+        "_prevent",
     ]
 
-    sender: MessageTarget
+    ALLOW_SELECTOR_MATCH: ClassVar[set[str]] = set()
+    """Additional attributes that can be used with the [`on` decorator][textual.on].
+
+    These attributes must be widgets.
+    """
     bubble: ClassVar[bool] = True  # Message will bubble to parent
     verbose: ClassVar[bool] = False  # Message is verbose
     no_dispatch: ClassVar[bool] = False  # Message may not be handled by client code
     namespace: ClassVar[str] = ""  # Namespace to disambiguate messages
+    handler_name: ClassVar[str]
+    """Name of the default message handler."""
 
-    def __init__(self, sender: MessageTarget) -> None:
-        self.sender = sender
-        self.name = camel_to_snake(self.__class__.__name__)
-        self.time = _clock.get_time_no_wait()
+    def __init__(self) -> None:
+        self.__post_init__()
+
+    def __post_init__(self) -> None:
+        """Allow dataclasses to initialize the object."""
+        self._sender: MessagePump | None = active_message_pump.get(None)
+        self.time: float = _time.get_time()
         self._forwarded = False
         self._no_default_action = False
         self._stop_propagation = False
-        self._handler_name = (
-            f"on_{self.namespace}_{self.name}" if self.namespace else f"on_{self.name}"
-        )
-        super().__init__()
+        self._prevent: set[type[Message]] = set()
 
     def __rich_repr__(self) -> rich.repr.Result:
-        yield self.sender
+        yield from ()
 
     def __init_subclass__(
         cls,
@@ -68,29 +74,57 @@ class Message:
             cls.no_dispatch = no_dispatch
         if namespace is not None:
             cls.namespace = namespace
+            name = f"{namespace}_{camel_to_snake(cls.__name__)}"
+        else:
+            # a class defined inside of a function will have a qualified name like func.<locals>.Class,
+            # so make sure we only use the actual class name(s)
+            qualname = cls.__qualname__.rsplit("<locals>.", 1)[-1]
+            # only keep the last two parts of the qualified name of deeply nested classes
+            # for backwards compatibility, e.g. A.B.C.D becomes C.D
+            namespace = qualname.rsplit(".", 2)[-2:]
+            name = "_".join(camel_to_snake(part) for part in namespace)
+        cls.handler_name = f"on_{name}"
+
+    @property
+    def control(self) -> DOMNode | None:
+        """The widget associated with this message, or None by default."""
+        return None
 
     @property
     def is_forwarded(self) -> bool:
+        """Has the message been forwarded?"""
         return self._forwarded
-
-    @property
-    def handler_name(self) -> str:
-        """The name of the handler associated with this message."""
-        # Property to make it read only
-        return self._handler_name
 
     def _set_forwarded(self) -> None:
         """Mark this event as being forwarded."""
         self._forwarded = True
 
+    def set_sender(self, sender: MessagePump) -> Self:
+        """Set the sender of the message.
+
+        Args:
+            sender: The sender.
+
+        Note:
+            When creating a message the sender is automatically set.
+            Normally there will be no need for this method to be called.
+            This method will be used when strict control is required over
+            the sender of a message.
+
+        Returns:
+            Self.
+        """
+        self._sender = sender
+        return self
+
     def can_replace(self, message: "Message") -> bool:
         """Check if another message may supersede this one.
 
         Args:
-            message (Message): Another message.
+            message: Another message.
 
         Returns:
-            bool: True if this message may replace the given message
+            True if this message may replace the given message
         """
         return False
 
@@ -99,8 +133,8 @@ class Message:
         from being called.
 
         Args:
-            prevent (bool, optional): True if the default action should be suppressed,
-                or False if the default actions should be performed. Defaults to True.
+            prevent: True if the default action should be suppressed,
+                or False if the default actions should be performed.
         """
         self._no_default_action = prevent
         return self
@@ -109,15 +143,16 @@ class Message:
         """Stop propagation of the message to parent.
 
         Args:
-            stop (bool, optional): The stop flag. Defaults to True.
+            stop: The stop flag.
         """
         self._stop_propagation = stop
         return self
 
-    async def _bubble_to(self, widget: MessagePump) -> None:
+    def _bubble_to(self, widget: MessagePump) -> None:
         """Bubble to a widget (typically the parent).
 
         Args:
-            widget (Widget): Target of bubble.
+            widget: Target of bubble.
         """
-        await widget.post_message(self)
+        self._no_default_action = False
+        widget.post_message(self)

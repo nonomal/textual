@@ -1,1 +1,5 @@
-::: textual.binding.Binding
+---
+title: "textual.binding"
+---
+
+::: textual.binding

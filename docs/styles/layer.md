@@ -1,15 +1,21 @@
 # Layer
 
-The `layer` property is used to assign widgets to a layer.
-The value of the `layer` property must be the name of a layer defined using a `layers` declaration.
-Layers control the order in which widgets are painted on screen.
-More information on layers can be found in the [guide](../guide/layout.md#layers).
+The `layer` style defines the layer a widget belongs to.
 
 ## Syntax
 
-```
-layer: <STRING>;
-```
+--8<-- "docs/snippets/syntax_block_start.md"
+layer: <a href="../../css_types/name">&lt;name&gt;</a>;
+--8<-- "docs/snippets/syntax_block_end.md"
+
+The `layer` style accepts a [`<name>`](../css_types/name.md) that defines the layer this widget belongs to.
+This [`<name>`](../css_types/name.md) must correspond to a [`<name>`](../css_types/name.md) that has been defined in a [`layers`](./layers.md) style by an ancestor of this widget.
+
+More information on layers can be found in the [guide](../guide/layout.md#layers).
+
+!!! warning
+
+    Using a `<name>` that hasn't been defined in a [`layers`](./layers.md) declaration of an ancestor of this widget has no effect.
 
 ## Example
 
@@ -29,15 +35,15 @@ However, since `#box1` is on the higher layer, it is drawn on top of `#box2`.
     --8<-- "docs/examples/guide/layout/layers.py"
     ```
 
-=== "layers.css"
+=== "layers.tcss"
 
-    ```sass hl_lines="3 15 19"
-    --8<-- "docs/examples/guide/layout/layers.css"
+    ```css hl_lines="3 14 19"
+    --8<-- "docs/examples/guide/layout/layers.tcss"
     ```
 
 ## CSS
 
-```sass
+```css
 /* Draw the widget on the layer called 'below' */
 layer: below;
 ```
@@ -46,5 +52,10 @@ layer: below;
 
 ```python
 # Draw the widget on the layer called 'below'
-widget.layer = "below"
+widget.styles.layer = "below"
 ```
+
+## See also
+
+ - The [layout guide](../guide/layout.md#layers) section on layers.
+ - [`layers`](./layers.md) to define an ordered set of layers.

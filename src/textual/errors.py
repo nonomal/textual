@@ -1,3 +1,8 @@
+"""
+General exception classes.
+
+"""
+
 from __future__ import annotations
 
 
@@ -14,4 +19,8 @@ class RenderError(TextualError):
 
 
 class DuplicateKeyHandlers(TextualError):
-    """More than one handler for a single key press. E.g. key_ctrl_i and key_tab handlers both found on one object."""
+    """More than one handler for a single key press.
+
+    For example, if the handlers `key_ctrl_i` and `key_tab` were defined on the same
+    widget, then this error would be raised.
+    """

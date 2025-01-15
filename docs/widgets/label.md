@@ -1,5 +1,7 @@
 # Label
 
+!!! tip "Added in version 0.5.0"
+
 A widget which displays static text, but which can also contain more complex Rich renderables.
 
 - [ ] Focusable
@@ -26,8 +28,19 @@ This widget has no reactive attributes.
 
 ## Messages
 
-This widget sends no messages.
+This widget posts no messages.
 
-## See Also
+## Bindings
 
-* [Label](../api/label.md) code reference
+This widget has no bindings.
+
+## Component Classes
+
+This widget has no component classes.
+
+---
+
+
+::: textual.widgets.Label
+    options:
+      heading_level: 2

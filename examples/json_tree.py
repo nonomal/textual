@@ -1,9 +1,11 @@
 import json
+from pathlib import Path
 
 from rich.text import Text
 
 from textual.app import App, ComposeResult
-from textual.widgets import Header, Footer, Tree, TreeNode
+from textual.widgets import Header, Footer, Tree
+from textual.widgets.tree import TreeNode
 
 
 class TreeApp(App):
@@ -41,30 +43,31 @@ class TreeApp(App):
                 data (object): Data associated with the node.
             """
             if isinstance(data, dict):
-                node._label = Text(f"{{}} {name}")
+                node.set_label(Text(f"{{}} {name}"))
                 for key, value in data.items():
                     new_node = node.add("")
                     add_node(key, new_node, value)
             elif isinstance(data, list):
-                node._label = Text(f"[] {name}")
+                node.set_label(Text(f"[] {name}"))
                 for index, value in enumerate(data):
                     new_node = node.add("")
                     add_node(str(index), new_node, value)
             else:
-                node._allow_expand = False
+                node.allow_expand = False
                 if name:
                     label = Text.assemble(
                         Text.from_markup(f"[b]{name}[/b]="), highlighter(repr(data))
                     )
                 else:
                     label = Text(repr(data))
-                node._label = label
+                node.set_label(label)
 
         add_node("JSON", node, json_data)
 
     def on_mount(self) -> None:
         """Load some JSON when the app starts."""
-        with open("food.json") as data_file:
+        file_path = Path(__file__).parent / "food.json"
+        with open(file_path) as data_file:
             self.json_data = json.load(data_file)
 
     def action_add(self) -> None:

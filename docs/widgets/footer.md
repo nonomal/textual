@@ -1,10 +1,13 @@
 # Footer
 
+!!! tip "Added in version 0.63.0"
+
 A simple footer widget which is docked to the bottom of its parent container. Displays
 available keybindings for the currently focused widget.
 
 - [ ] Focusable
 - [ ] Container
+
 
 ## Example
 
@@ -24,19 +27,33 @@ widget. Notice how the `Footer` automatically displays the keybinding.
 
 ## Reactive Attributes
 
-| Name            | Type  | Default | Description                                                                                               |
-| --------------- | ----- | ------- | --------------------------------------------------------------------------------------------------------- |
-| `highlight_key` | `str` | `None`  | Stores the currently highlighted key. This is typically the key the cursor is hovered over in the footer. |
+| Name                   | Type   | Default | Description                                                                                |
+| ---------------------- | ------ | ------- | ------------------------------------------------------------------------------------------ |
+| `compact`              | `bool` | `False` | Display a more compact footer.                                                             |
+| `show_command_palette` | `bool` | `True`  | Display the key to invoke the command palette (show on the right hand side of the footer). |
 
 ## Messages
 
-This widget sends no messages.
+This widget posts no messages.
+
+## Bindings
+
+This widget has no bindings.
+
+## Component Classes
+
+This widget has no component classes.
+
 
 ## Additional Notes
 
 * You can prevent keybindings from appearing in the footer by setting the `show` argument of the `Binding` to `False`.
 * You can customize the text that appears for the key itself in the footer using the `key_display` argument of `Binding`.
 
-## See Also
 
-* [Footer](../api/footer.md) code reference
+---
+
+
+::: textual.widgets.Footer
+    options:
+      heading_level: 2

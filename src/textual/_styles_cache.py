@@ -2,56 +2,35 @@ from __future__ import annotations
 
 from functools import lru_cache
 from sys import intern
-from typing import TYPE_CHECKING, Callable, Iterable, List
+from typing import TYPE_CHECKING, Callable, Iterable, Sequence
 
+from rich.console import Console
 from rich.segment import Segment
 from rich.style import Style
+from rich.terminal_theme import TerminalTheme
+from rich.text import Text
 
-from ._border import get_box, render_row
-from ._filter import LineFilter
-from ._opacity import _apply_opacity
-from ._segment_tools import line_crop, line_pad, line_trim
-from ._types import Lines
-from ._typing import TypeAlias
-from .color import Color
-from .geometry import Region, Size, Spacing
-from .renderables.text_opacity import TextOpacity
-from .renderables.tint import Tint
+from textual import log
+from textual._ansi_theme import DEFAULT_TERMINAL_THEME
+from textual._border import get_box, render_border_label, render_row
+from textual._context import active_app
+from textual._opacity import _apply_opacity
+from textual._segment_tools import apply_hatch, line_pad, line_trim
+from textual.color import Color
+from textual.constants import DEBUG
+from textual.filter import LineFilter
+from textual.geometry import Region, Size, Spacing
+from textual.renderables.text_opacity import TextOpacity
+from textual.renderables.tint import Tint
+from textual.strip import Strip
 
 if TYPE_CHECKING:
-    from .css.styles import StylesBase
-    from .widget import Widget
+    from typing_extensions import TypeAlias
 
-RenderLineCallback: TypeAlias = Callable[[int], List[Segment]]
+    from textual.css.styles import StylesBase
+    from textual.widget import Widget
 
-
-def style_links(
-    segments: Iterable[Segment], link_id: str, link_style: Style
-) -> list[Segment]:
-    """Apply a style to the given link id.
-
-    Args:
-        segments (Iterable[Segment]): Segments.
-        link_id (str): A link id.
-        link_style (Style): Style to apply.
-
-    Returns:
-        list[Segment]: A list of new segments.
-    """
-
-    _Segment = Segment
-
-    segments = [
-        _Segment(
-            text,
-            (style + link_style if style is not None else None)
-            if (style and not style._null and style._link_id == link_id)
-            else style,
-            control,
-        )
-        for text, style, control in segments
-    ]
-    return segments
+RenderLineCallback: TypeAlias = Callable[[int], Strip]
 
 
 @lru_cache(1024 * 8)
@@ -59,11 +38,11 @@ def make_blank(width, style: Style) -> Segment:
     """Make a blank segment.
 
     Args:
-        width (_type_): Width of blank.
-        style (Style): Style of blank.
+        width: Width of blank.
+        style: Style of blank.
 
     Returns:
-        Segment: A single segment
+        A single segment
     """
     return Segment(intern(" " * width), style)
 
@@ -91,11 +70,10 @@ class StylesCache:
     ┃                      ┃
     ┗━━━━━━━━━━━━━━━━━━━━━━┛
     ```
-
     """
 
     def __init__(self) -> None:
-        self._cache: dict[int, list[Segment]] = {}
+        self._cache: dict[int, Strip] = {}
         self._dirty_lines: set[int] = set()
         self._width = 1
 
@@ -111,10 +89,10 @@ class StylesCache:
         """Check if a given line is dirty (needs to be rendered again).
 
         Args:
-            y (int): Y coordinate of line.
+            y: Y coordinate of line.
 
         Returns:
-            bool: True if line requires a render, False if can be cached.
+            True if line requires a render, False if can be cached.
         """
         return y in self._dirty_lines
 
@@ -123,46 +101,67 @@ class StylesCache:
         self._cache.clear()
         self._dirty_lines.clear()
 
-    def render_widget(self, widget: Widget, crop: Region) -> Lines:
+    def render_widget(self, widget: Widget, crop: Region) -> list[Strip]:
         """Render the content for a widget.
 
         Args:
-            widget (Widget): A widget.
-            region (Region): A region of the widget to render.
+            widget: A widget.
+            region: A region of the widget to render.
 
         Returns:
-            Lines: Rendered lines.
+            Rendered lines.
         """
-        base_background, background = widget.background_colors
+
+        border_title = widget._border_title
+        border_subtitle = widget._border_subtitle
+
+        base_background, background = widget._opacity_background_colors
         styles = widget.styles
-        lines = self.render(
+        strips = self.render(
             styles,
             widget.region.size,
             base_background,
             background,
             widget.render_line,
+            widget.app.console,
+            (
+                None
+                if border_title is None
+                else (
+                    border_title,
+                    *widget._get_title_style_information(base_background),
+                )
+            ),
+            (
+                None
+                if border_subtitle is None
+                else (
+                    border_subtitle,
+                    *widget._get_subtitle_style_information(base_background),
+                )
+            ),
             content_size=widget.content_region.size,
             padding=styles.padding,
             crop=crop,
-            filter=widget.app._filter,
+            filters=widget.app._filters,
+            opacity=widget.opacity,
+            ansi_theme=widget.app.ansi_theme,
         )
         if widget.auto_links:
-            _style_links = style_links
             hover_style = widget.hover_style
-            link_hover_style = widget.link_hover_style
             if (
-                link_hover_style
-                and hover_style._link_id
+                hover_style._link_id
                 and hover_style._meta
                 and "@click" in hover_style.meta
             ):
-                if link_hover_style:
-                    lines = [
-                        _style_links(line, hover_style.link_id, link_hover_style)
-                        for line in lines
+                link_style_hover = widget.link_style_hover
+                if link_style_hover:
+                    strips = [
+                        strip.style_links(hover_style.link_id, link_style_hover)
+                        for strip in strips
                     ]
 
-        return lines
+        return strips
 
     def render(
         self,
@@ -171,25 +170,35 @@ class StylesCache:
         base_background: Color,
         background: Color,
         render_content_line: RenderLineCallback,
+        console: Console,
+        border_title: tuple[Text, Color, Color, Style] | None,
+        border_subtitle: tuple[Text, Color, Color, Style] | None,
         content_size: Size | None = None,
         padding: Spacing | None = None,
         crop: Region | None = None,
-        filter: LineFilter | None = None,
-    ) -> Lines:
+        filters: Sequence[LineFilter] | None = None,
+        opacity: float = 1.0,
+        ansi_theme: TerminalTheme = DEFAULT_TERMINAL_THEME,
+    ) -> list[Strip]:
         """Render a widget content plus CSS styles.
 
         Args:
-            styles (StylesBase): CSS Styles object.
-            size (Size): Size of widget.
-            base_background (Color): Background color beneath widget.
-            background (Color): Background color of widget.
-            render_content_line (RenderLineCallback): Callback to render content line.
-            content_size (Size | None, optional): Size of content or None to assume full size. Defaults to None.
-            padding (Spacing | None, optional): Override padding from Styles, or None to use styles.padding. Defaults to None.
-            crop (Region | None, optional): Region to crop to. Defaults to None.
+            styles: CSS Styles object.
+            size: Size of widget.
+            base_background: Background color beneath widget.
+            background: Background color of widget.
+            render_content_line: Callback to render content line.
+            console: The console in use by the app.
+            border_title: Optional tuple of (title, color, background, style).
+            border_subtitle: Optional tuple of (subtitle, color, background, style).
+            content_size: Size of content or None to assume full size.
+            padding: Override padding from Styles, or None to use styles.padding.
+            crop: Region to crop to.
+            filters: Additional post-processing for the segments.
+            opacity: Widget opacity.
 
         Returns:
-            Lines: Rendered lines.
+            Rendered lines.
         """
         if content_size is None:
             content_size = size
@@ -202,15 +211,17 @@ class StylesCache:
         if width != self._width:
             self.clear()
             self._width = width
-        lines: Lines = []
-        add_line = lines.append
-        simplify = Segment.simplify
+        strips: list[Strip] = []
+        add_strip = strips.append
 
         is_dirty = self._dirty_lines.__contains__
         render_line = self.render_line
+        apply_filters = (
+            [] if filters is None else [filter for filter in filters if filter.enabled]
+        )
         for y in crop.line_range:
             if is_dirty(y) or y not in self._cache:
-                line = render_line(
+                strip = render_line(
                     styles,
                     y,
                     size,
@@ -219,22 +230,32 @@ class StylesCache:
                     base_background,
                     background,
                     render_content_line,
+                    console,
+                    border_title,
+                    border_subtitle,
+                    opacity,
+                    ansi_theme,
                 )
-                line = list(simplify(line))
-                self._cache[y] = line
+                self._cache[y] = strip
             else:
-                line = self._cache[y]
-            if filter:
-                line = filter.filter(line)
-            add_line(line)
+                strip = self._cache[y]
+
+            for filter in apply_filters:
+                strip = strip.apply_filter(filter, background)
+
+            if DEBUG:
+                if any([not (segment.control or segment.text) for segment in strip]):
+                    log.warning(f"Strip contains invalid empty Segments: {strip!r}.")
+
+            add_strip(strip)
+
         self._dirty_lines.difference_update(crop.line_range)
 
         if crop.column_span != (0, width):
-            _line_crop = line_crop
             x1, x2 = crop.column_span
-            lines = [_line_crop(line, x1, x2, width) for line in lines]
+            strips = [strip.crop(x1, x2) for strip in strips]
 
-        return lines
+        return strips
 
     def render_line(
         self,
@@ -245,22 +266,31 @@ class StylesCache:
         padding: Spacing,
         base_background: Color,
         background: Color,
-        render_content_line: RenderLineCallback,
-    ) -> list[Segment]:
+        render_content_line: Callable[[int], Strip],
+        console: Console,
+        border_title: tuple[Text, Color, Color, Style] | None,
+        border_subtitle: tuple[Text, Color, Color, Style] | None,
+        opacity: float,
+        ansi_theme: TerminalTheme,
+    ) -> Strip:
         """Render a styled line.
 
         Args:
-            styles (StylesBase): Styles object.
-            y (int): The y coordinate of the line (relative to widget screen offset).
-            size (Size): Size of the widget.
-            content_size (Size): Size of the content area.
-            padding (Spacing): Padding.
-            base_background (Color): Background color of widget beneath this line.
-            background (Color): Background color of widget.
-            render_content_line (RenderLineCallback): Callback to render a line of content.
+            styles: Styles object.
+            y: The y coordinate of the line (relative to widget screen offset).
+            size: Size of the widget.
+            content_size: Size of the content area.
+            padding: Padding.
+            base_background: Background color of widget beneath this line.
+            background: Background color of widget.
+            render_content_line: Callback to render a line of content.
+            console: The console in use by the app.
+            border_title: Optional tuple of (title, color, background, style).
+            border_subtitle: Optional tuple of (subtitle, color, background, style).
+            opacity: Opacity of line.
 
         Returns:
-            list[Segment]: A line of segments.
+            A line of segments.
         """
 
         gutter = styles.gutter
@@ -288,41 +318,101 @@ class StylesCache:
         inner = from_color(bgcolor=(base_background + background).rich_color)
         outer = from_color(bgcolor=base_background.rich_color)
 
-        def post(segments: Iterable[Segment]) -> list[Segment]:
+        def line_post(segments: Iterable[Segment]) -> Iterable[Segment]:
+            """Apply effects to segments inside the border."""
+            if styles.has_rule("hatch") and styles.hatch != "none":
+                character, color = styles.hatch
+                if character != " " and color.a > 0:
+                    hatch_style = Style.from_color(
+                        (background + color).rich_color, background.rich_color
+                    )
+                    return apply_hatch(segments, character, hatch_style)
+            return segments
+
+        def post(segments: Iterable[Segment]) -> Iterable[Segment]:
             """Post process segments to apply opacity and tint.
 
             Args:
-                segments (Iterable[Segment]): Iterable of segments.
+                segments: Iterable of segments.
 
             Returns:
-                list[Segment]: New list of segments
+                New list of segments
             """
-            if styles.text_opacity != 1.0:
-                segments = TextOpacity.process_segments(segments, styles.text_opacity)
+
+            try:
+                app = active_app.get()
+                ansi_theme = app.ansi_theme
+            except LookupError:
+                ansi_theme = DEFAULT_TERMINAL_THEME
+
             if styles.tint.a:
-                segments = Tint.process_segments(segments, styles.tint)
-            if styles.opacity != 1.0:
-                segments = _apply_opacity(segments, base_background, styles.opacity)
-            segments = list(segments)
-            return segments if isinstance(segments, list) else list(segments)
+                segments = Tint.process_segments(segments, styles.tint, ansi_theme)
+            if opacity != 1.0:
+                segments = _apply_opacity(segments, base_background, opacity)
+            return segments
 
         line: Iterable[Segment]
         # Draw top or bottom borders (A)
         if (border_top and y == 0) or (border_bottom and y == height - 1):
+            is_top = y == 0
             border_color = base_background + (
-                border_top_color if y == 0 else border_bottom_color
-            )
+                border_top_color if is_top else border_bottom_color
+            ).multiply_alpha(opacity)
+            border_color_as_style = from_color(color=border_color.rich_color)
+            border_edge_type = border_top if is_top else border_bottom
+            has_left = border_left != ""
+            has_right = border_right != ""
+            border_label = border_title if is_top else border_subtitle
+            if border_label is None:
+                render_label = None
+            else:
+                label, label_color, label_background, style = border_label
+                base_label_background = base_background + background
+                style += Style.from_color(
+                    (
+                        (base_label_background + label_color).rich_color
+                        if label_color.a
+                        else None
+                    ),
+                    (
+                        (base_label_background + label_background).rich_color
+                        if label_background.a
+                        else None
+                    ),
+                )
+                render_label = (label, style)
+            # Try to save time with expensive call to `render_border_label`:
+            if render_label:
+                label_segments = render_border_label(
+                    render_label,
+                    is_top,
+                    border_edge_type,
+                    width - 2,
+                    inner,
+                    outer,
+                    border_color_as_style,
+                    console,
+                    has_left,
+                    has_right,
+                )
+            else:
+                label_segments = []
             box_segments = get_box(
-                border_top if y == 0 else border_bottom,
+                border_edge_type,
                 inner,
                 outer,
-                from_color(color=border_color.rich_color),
+                border_color_as_style,
+            )
+            label_alignment = (
+                styles.border_title_align if is_top else styles.border_subtitle_align
             )
             line = render_row(
-                box_segments[0 if y == 0 else 2],
+                box_segments[0 if is_top else 2],
                 width,
-                border_left != "",
-                border_right != "",
+                has_left,
+                has_right,
+                label_segments,
+                label_alignment,  # type: ignore
             )
 
         # Draw padding (B)
@@ -330,9 +420,17 @@ class StylesCache:
             pad_bottom and y >= height - gutter.bottom
         ):
             background_style = from_color(bgcolor=background.rich_color)
-            left_style = from_color(color=(background + border_left_color).rich_color)
+            left_style = from_color(
+                color=(
+                    base_background + border_left_color.multiply_alpha(opacity)
+                ).rich_color
+            )
             left = get_box(border_left, inner, outer, left_style)[1][0]
-            right_style = from_color(color=(background + border_right_color).rich_color)
+            right_style = from_color(
+                color=(
+                    base_background + border_right_color.multiply_alpha(opacity)
+                ).rich_color
+            )
             right = get_box(border_right, inner, outer, right_style)[1][2]
             if border_left and border_right:
                 line = [left, make_blank(width - 2, background_style), right]
@@ -342,25 +440,35 @@ class StylesCache:
                 line = [make_blank(width - 1, background_style), right]
             else:
                 line = [make_blank(width, background_style)]
+            line = line_post(line)
         else:
             # Content with border and padding (C)
             content_y = y - gutter.top
             if content_y < content_height:
                 line = render_content_line(y - gutter.top)
+                line = line.adjust_cell_length(content_width)
             else:
                 line = [make_blank(content_width, inner)]
             if inner:
                 line = Segment.apply_style(line, inner)
-            line = line_pad(line, pad_left, pad_right, inner)
+            if styles.text_opacity != 1.0:
+                line = TextOpacity.process_segments(
+                    line, styles.text_opacity, ansi_theme
+                )
+            line = line_post(line_pad(line, pad_left, pad_right, inner))
 
             if border_left or border_right:
                 # Add left / right border
                 left_style = from_color(
-                    (base_background + border_left_color).rich_color
+                    (
+                        base_background + border_left_color.multiply_alpha(opacity)
+                    ).rich_color
                 )
                 left = get_box(border_left, inner, outer, left_style)[1][0]
                 right_style = from_color(
-                    (base_background + border_right_color).rich_color
+                    (
+                        base_background + border_right_color.multiply_alpha(opacity)
+                    ).rich_color
                 )
                 right = get_box(border_right, inner, outer, right_style)[1][2]
 
@@ -379,13 +487,14 @@ class StylesCache:
                 outline_top if y == 0 else outline_bottom,
                 inner,
                 outer,
-                from_color(color=outline_color.rich_color),
+                from_color(color=(base_background + outline_color).rich_color),
             )
             line = render_row(
                 box_segments[0 if y == 0 else 2],
                 width,
                 outline_left != "",
                 outline_right != "",
+                (),
             )
 
         elif outline_left or outline_right:
@@ -402,4 +511,5 @@ class StylesCache:
             else:
                 line = [*line, right]
 
-        return post(line)
+        strip = Strip(post(line), width)
+        return strip

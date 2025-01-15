@@ -1,26 +1,26 @@
 from __future__ import annotations
 
+import re
 from enum import Enum, unique
 from fractions import Fraction
 from functools import lru_cache
-import re
 from typing import Iterable, NamedTuple
 
 import rich.repr
 
-from ..geometry import Offset, Size, clamp
+from textual.geometry import Offset, Size, clamp
 
 
 class ScalarError(Exception):
-    pass
+    """Base class for exceptions raised by the Scalar class."""
 
 
 class ScalarResolveError(ScalarError):
-    pass
+    """Raised for errors resolving scalars (unlikely to occur in practice)."""
 
 
 class ScalarParseError(ScalarError):
-    pass
+    """Raised when a scalar couldn't be parsed from a string."""
 
 
 @unique
@@ -37,8 +37,6 @@ class Unit(Enum):
     AUTO = 8
 
 
-UNIT_EXCLUDES_BORDER = {Unit.CELLS, Unit.FRACTION, Unit.VIEW_WIDTH, Unit.VIEW_HEIGHT}
-
 UNIT_SYMBOL = {
     Unit.CELLS: "",
     Unit.FRACTION: "fr",
@@ -52,6 +50,7 @@ UNIT_SYMBOL = {
 SYMBOL_UNIT = {v: k for k, v in UNIT_SYMBOL.items()}
 
 _MATCH_SCALAR = re.compile(r"^(-?\d+\.?\d*)(fr|%|w|h|vw|vh)?$").match
+_FRACTION_ONE = Fraction(1)
 
 
 def _resolve_cells(
@@ -60,13 +59,13 @@ def _resolve_cells(
     """Resolves explicit cell size, i.e. width: 10
 
     Args:
-        value (float): Scalar value.
-        size (Size): Size of widget.
-        viewport (Size): Size of viewport.
-        fraction_unit (Fraction): Size of fraction, i.e. size of 1fr as a Fraction.
+        value: Scalar value.
+        size: Size of widget.
+        viewport: Size of viewport.
+        fraction_unit: Size of fraction, i.e. size of 1fr as a Fraction.
 
     Returns:
-        Fraction: Resolved unit.
+        Resolved unit.
     """
     return Fraction(value)
 
@@ -77,13 +76,13 @@ def _resolve_fraction(
     """Resolves a fraction unit i.e. width: 2fr
 
     Args:
-        value (float): Scalar value.
-        size (Size): Size of widget.
-        viewport (Size): Size of viewport.
-        fraction_unit (Fraction): Size of fraction, i.e. size of 1fr as a Fraction.
+        value: Scalar value.
+        size: Size of widget.
+        viewport: Size of viewport.
+        fraction_unit: Size of fraction, i.e. size of 1fr as a Fraction.
 
     Returns:
-        Fraction: Resolved unit.
+        Resolved unit.
     """
     return fraction_unit * Fraction(value)
 
@@ -94,13 +93,13 @@ def _resolve_width(
     """Resolves width unit i.e. width: 50w.
 
     Args:
-        value (float): Scalar value.
-        size (Size): Size of widget.
-        viewport (Size): Size of viewport.
-        fraction_unit (Fraction): Size of fraction, i.e. size of 1fr as a Fraction.
+        value: Scalar value.
+        size: Size of widget.
+        viewport: Size of viewport.
+        fraction_unit: Size of fraction, i.e. size of 1fr as a Fraction.
 
     Returns:
-        Fraction: Resolved unit.
+        Resolved unit.
     """
     return Fraction(value) * Fraction(size.width, 100)
 
@@ -111,13 +110,13 @@ def _resolve_height(
     """Resolves height unit, i.e. height: 12h.
 
     Args:
-        value (float): Scalar value.
-        size (Size): Size of widget.
-        viewport (Size): Size of viewport.
-        fraction_unit (Fraction): Size of fraction, i.e. size of 1fr as a Fraction.
+        value: Scalar value.
+        size: Size of widget.
+        viewport: Size of viewport.
+        fraction_unit: Size of fraction, i.e. size of 1fr as a Fraction.
 
     Returns:
-        Fraction: Resolved unit.
+        Resolved unit.
     """
     return Fraction(value) * Fraction(size.height, 100)
 
@@ -128,13 +127,13 @@ def _resolve_view_width(
     """Resolves view width unit, i.e. width: 25vw.
 
     Args:
-        value (float): Scalar value.
-        size (Size): Size of widget.
-        viewport (Size): Size of viewport.
-        fraction_unit (Fraction): Size of fraction, i.e. size of 1fr as a Fraction.
+        value: Scalar value.
+        size: Size of widget.
+        viewport: Size of viewport.
+        fraction_unit: Size of fraction, i.e. size of 1fr as a Fraction.
 
     Returns:
-        Fraction: Resolved unit.
+        Resolved unit.
     """
     return Fraction(value) * Fraction(viewport.width, 100)
 
@@ -145,13 +144,13 @@ def _resolve_view_height(
     """Resolves view height unit, i.e. height: 25vh.
 
     Args:
-        value (float): Scalar value.
-        size (Size): Size of widget.
-        viewport (Size): Size of viewport.
-        fraction_unit (Fraction): Size of fraction, i.e. size of 1fr as a Fraction.
+        value: Scalar value.
+        size: Size of widget.
+        viewport: Size of viewport.
+        fraction_unit: Size of fraction, i.e. size of 1fr as a Fraction.
 
     Returns:
-        Fraction: Resolved unit.
+        Resolved unit.
     """
     return Fraction(value) * Fraction(viewport.height, 100)
 
@@ -170,10 +169,10 @@ def get_symbols(units: Iterable[Unit]) -> list[str]:
     """Get symbols for an iterable of units.
 
     Args:
-        units (Iterable[Unit]): A number of units.
+        units: A number of units.
 
     Returns:
-        list[str]: List of symbols.
+        List of symbols.
     """
     return [UNIT_SYMBOL[unit] for unit in units]
 
@@ -207,10 +206,6 @@ class Scalar(NamedTuple):
         return self.unit == Unit.FRACTION
 
     @property
-    def excludes_border(self) -> bool:
-        return self.unit in UNIT_EXCLUDES_BORDER
-
-    @property
     def cells(self) -> int | None:
         """Check if the unit is explicit cells."""
         value, unit, _ = self
@@ -237,25 +232,26 @@ class Scalar(NamedTuple):
         """Create a scalar with cells unit.
 
         Args:
-            value (float): A number of cells.
+            value: A number of cells.
 
         Returns:
-            Scalar: New Scalar.
+            New Scalar.
         """
         return cls(float(value), Unit.CELLS, Unit.WIDTH)
 
     @classmethod
+    @lru_cache(maxsize=1024)
     def parse(cls, token: str, percent_unit: Unit = Unit.WIDTH) -> Scalar:
-        """Parse a string in to a Scalar
+        """Parse a string into a Scalar
 
         Args:
-            token (str): A string containing a scalar, e.g. "3.14fr"
+            token: A string containing a scalar, e.g. "3.14fr"
 
         Raises:
             ScalarParseError: If the value is not a valid scalar
 
         Returns:
-            Scalar: New scalar
+            New scalar
         """
         if token.lower() == "auto":
             scalar = cls(1.0, Unit.AUTO, Unit.AUTO)
@@ -271,17 +267,17 @@ class Scalar(NamedTuple):
     def resolve(
         self, size: Size, viewport: Size, fraction_unit: Fraction | None = None
     ) -> Fraction:
-        """Resolve scalar with units in to a dimensions.
+        """Resolve scalar with units into a dimensions.
 
         Args:
-            size (tuple[int, int]): Size of the container.
-            viewport (tuple[int, int]): Size of the viewport (typically terminal size)
+            size: Size of the container.
+            viewport: Size of the viewport (typically terminal size)
 
         Raises:
             ScalarResolveError: If the unit is unknown.
 
         Returns:
-            int: A size (in cells)
+            A size (in cells)
         """
         value, unit, percent_unit = self
 
@@ -289,7 +285,7 @@ class Scalar(NamedTuple):
             unit = percent_unit
         try:
             dimension = RESOLVE_MAP[unit](
-                value, size, viewport, fraction_unit or Fraction(1)
+                value, size, viewport, fraction_unit or _FRACTION_ONE
             )
         except KeyError:
             raise ScalarResolveError(f"expected dimensions; found {str(self)!r}")
@@ -304,9 +300,9 @@ class Scalar(NamedTuple):
         """Get a copy of this Scalar, with values optionally modified
 
         Args:
-            value (float | None): The new value, or None to keep the same value
-            unit (Unit | None): The new unit, or None to keep the same unit
-            percent_unit (Unit | None): The new percent_unit, or None to keep the same percent_unit
+            value: The new value, or None to keep the same value
+            unit: The new unit, or None to keep the same unit
+            percent_unit: The new percent_unit, or None to keep the same percent_unit
         """
         return Scalar(
             value if value is not None else self.value,
@@ -332,10 +328,10 @@ class ScalarOffset(NamedTuple):
         """Create a Scalar offset from a tuple of integers.
 
         Args:
-            offset (tuple[int, int]): Offset in cells.
+            offset: Offset in cells.
 
         Returns:
-            ScalarOffset: New offset.
+            New offset.
         """
         x, y = offset
         return cls(
@@ -352,14 +348,14 @@ class ScalarOffset(NamedTuple):
         yield None, str(self.y)
 
     def resolve(self, size: Size, viewport: Size) -> Offset:
-        """Resolve the offset in to cells.
+        """Resolve the offset into cells.
 
         Args:
-            size (Size): Size of container.
-            viewport (Size): Size of viewport.
+            size: Size of container.
+            viewport: Size of viewport.
 
         Returns:
-            Offset: Offset in cells.
+            Offset in cells.
         """
         x, y = self
         return Offset(
@@ -375,7 +371,7 @@ def percentage_string_to_float(string: str) -> float:
     """Convert a string percentage e.g. '20%' to a float e.g. 20.0.
 
     Args:
-        string (str): The percentage string to convert.
+        string: The percentage string to convert.
     """
     string = string.strip()
     if string.endswith("%"):

@@ -1,1 +1,5 @@
-::: textual.dom.DOMNode
+---
+title: "textual.dom"
+---
+
+::: textual.dom

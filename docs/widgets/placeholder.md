@@ -1,5 +1,6 @@
 # Placeholder
 
+!!! tip "Added in version 0.6.0"
 
 A widget that is meant to have no complex functionality.
 Use the placeholder widget when studying the layout of your app before having to develop your custom widgets.
@@ -25,23 +26,34 @@ The example below shows each placeholder variant.
     --8<-- "docs/examples/widgets/placeholder.py"
     ```
 
-=== "placeholder.css"
+=== "placeholder.tcss"
 
     ```css
-    --8<-- "docs/examples/widgets/placeholder.css"
+    --8<-- "docs/examples/widgets/placeholder.tcss"
     ```
 
 ## Reactive Attributes
 
-| Name       | Type   | Default     | Description                                        |
-| ---------- | ------ | ----------- | -------------------------------------------------- |
-| `variant`  | `str`  | `"default"` | Styling variant. One of `default`, `size`, `text`. |
+| Name      | Type  | Default     | Description                                        |
+| --------- | ----- | ----------- | -------------------------------------------------- |
+| `variant` | `str` | `"default"` | Styling variant. One of `default`, `size`, `text`. |
 
 
 ## Messages
 
-This widget sends no messages.
+This widget posts no messages.
 
-## See Also
+## Bindings
 
-* [Placeholder](../api/placeholder.md) code reference
+This widget has no bindings.
+
+## Component Classes
+
+This widget has no component classes.
+
+---
+
+
+::: textual.widgets.Placeholder
+    options:
+      heading_level: 2

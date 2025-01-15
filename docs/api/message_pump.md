@@ -1,5 +1,5 @@
-A message pump is a class that processes messages.
+---
+title: "textual.message_pump"
+---
 
-It is a base class for the `App`, `Screen`, and `Widget` classes.
-
-::: textual.message_pump.MessagePump
+::: textual.message_pump

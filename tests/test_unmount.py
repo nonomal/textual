@@ -1,18 +1,20 @@
 from __future__ import annotations
 
-from textual.app import App, ComposeResult
 from textual import events
+from textual.app import App, ComposeResult
 from textual.containers import Container
 from textual.screen import Screen
 
 
-async def test_unmount():
+async def test_unmount() -> None:
     """Test unmount events are received in reverse DOM order."""
     unmount_ids: list[str] = []
 
     class UnmountWidget(Container):
         def on_unmount(self, event: events.Unmount):
-            unmount_ids.append(f"{self.__class__.__name__}#{self.id}-{self.parent is not None}-{len(self.children)}")
+            unmount_ids.append(
+                f"{self.__class__.__name__}#{self.id}-{self.parent is not None}-{len(self._nodes)}"
+            )
 
     class MyScreen(Screen):
         def compose(self) -> ComposeResult:
@@ -47,5 +49,6 @@ async def test_unmount():
         "UnmountWidget#top-True-0",
         "MyScreen#main",
     ]
+
 
     assert unmount_ids == expected

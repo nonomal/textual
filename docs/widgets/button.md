@@ -10,7 +10,7 @@ when it has focus.
 ## Example
 
 The example below shows each button variant, and its disabled equivalent.
-Clicking any of the non-disabled buttons in the example app below will result the app exiting and the details of the selected button being printed to the console.
+Clicking any of the non-disabled buttons in the example app below will result in the app exiting and the details of the selected button being printed to the console.
 
 === "Output"
 
@@ -23,36 +23,44 @@ Clicking any of the non-disabled buttons in the example app below will result th
     --8<-- "docs/examples/widgets/button.py"
     ```
 
-=== "button.css"
+=== "button.tcss"
 
     ```css
-    --8<-- "docs/examples/widgets/button.css"
+    --8<-- "docs/examples/widgets/button.tcss"
     ```
 
 ## Reactive Attributes
 
-| Name       | Type   | Default     | Description                                                                                                                       |
-| ---------- | ------ | ----------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `label`    | `str`  | `""`        | The text that appears inside the button.                                                                                          |
-| `variant`  | `str`  | `"default"` | Semantic styling variant. One of `default`, `primary`, `success`, `warning`, `error`.                                             |
-| `disabled` | `bool` | `False`     | Whether the button is disabled or not. Disabled buttons cannot be focused or clicked, and are styled in a way that suggests this. |
+| Name       | Type            | Default     | Description                                                                                                                       |
+|------------|-----------------|-------------|-----------------------------------------------------------------------------------------------------------------------------------|
+| `label`    | `str`           | `""`        | The text that appears inside the button.                                                                                          |
+| `variant`  | `ButtonVariant` | `"default"` | Semantic styling variant. One of `default`, `primary`, `success`, `warning`, `error`.                                             |
+| `disabled` | `bool`          | `False`     | Whether the button is disabled or not. Disabled buttons cannot be focused or clicked, and are styled in a way that suggests this. |
 
 ## Messages
 
-### Pressed
+- [Button.Pressed][textual.widgets.Button.Pressed]
 
-The `Button.Pressed` message is sent when the button is pressed.
+## Bindings
 
-- [x] Bubbles
+This widget has no bindings.
 
-#### Attributes
+## Component Classes
 
-_No other attributes_
+This widget has no component classes.
 
 ## Additional Notes
 
-* The spacing between the text and the edges of a button are due to border, _not_ padding. To create a button with zero visible padding, use the `border: none;` declaration.
+- The spacing between the text and the edges of a button are _not_ due to padding. The default styling for a `Button` has the `height` set to 3 lines and a `min-width` of 16 columns. To create a button with zero visible padding, you will need to change these values and also remove the border with `border: none;`.
 
-## See Also
+---
 
-* [Button](../api/button.md) code reference
+
+::: textual.widgets.Button
+    options:
+      heading_level: 2
+
+::: textual.widgets.button
+    options:
+      show_root_heading: true
+      show_root_toc_entry: true

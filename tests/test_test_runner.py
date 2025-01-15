@@ -1,5 +1,5 @@
-from textual.app import App
 from textual import events
+from textual.app import App
 
 
 async def test_run_test() -> None:
@@ -12,9 +12,11 @@ async def test_run_test() -> None:
 
     app = TestApp()
     async with app.run_test() as pilot:
-        assert str(pilot) == "<Pilot app=TestApp(title='TestApp')>"
+        assert str(pilot) in (
+            "<Pilot app=TestApp(title='TestApp', classes={'-dark-mode'}, pseudo_classes={'dark', 'focus'})>",
+            "<Pilot app=TestApp(title='TestApp', classes={'-dark-mode'}, pseudo_classes={'focus', 'dark'})>",
+        )
         await pilot.press("tab", *"foo")
-        await pilot.pause(1 / 100)
         await pilot.exit("bar")
 
     assert app.return_value == "bar"

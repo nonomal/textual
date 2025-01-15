@@ -1,7 +1,7 @@
 # Static
 
 A widget which displays static content.
-Can be used for Rich renderables and can also for the base for other types of widgets.
+Can be used for Rich renderables and can also be the base for other types of widgets.
 
 - [ ] Focusable
 - [ ] Container
@@ -27,9 +27,25 @@ This widget has no reactive attributes.
 
 ## Messages
 
-This widget sends no messages.
+This widget posts no messages.
+
+## Bindings
+
+This widget has no bindings.
+
+## Component Classes
+
+This widget has no component classes.
 
 ## See Also
 
-* [Static](../api/static.md) code reference
 * [Label](./label.md)
+* [Pretty](./pretty.md)
+
+
+---
+
+
+::: textual.widgets.Static
+    options:
+      heading_level: 2

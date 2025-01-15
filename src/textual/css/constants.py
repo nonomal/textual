@@ -1,39 +1,48 @@
 from __future__ import annotations
+
 import typing
 
-from ..geometry import Spacing
-from .._typing import Final
-
 if typing.TYPE_CHECKING:
-    from .types import EdgeType
+    from typing_extensions import Final
 
 VALID_VISIBILITY: Final = {"visible", "hidden"}
 VALID_DISPLAY: Final = {"block", "none"}
-VALID_BORDER: Final[set[EdgeType]] = {
-    "none",
-    "hidden",
+VALID_BORDER: Final = {
     "ascii",
-    "round",
     "blank",
-    "solid",
-    "double",
     "dashed",
+    "double",
     "heavy",
-    "inner",
-    "outer",
+    "hidden",
     "hkey",
-    "vkey",
+    "inner",
+    "none",
+    "outer",
+    "panel",
+    "round",
+    "solid",
     "tall",
+    "tab",
+    "thick",
+    "vkey",
     "wide",
 }
-VALID_EDGE: Final = {"top", "right", "bottom", "left"}
+VALID_EDGE: Final = {"top", "right", "bottom", "left", "none"}
 VALID_LAYOUT: Final = {"vertical", "horizontal", "grid"}
 
 VALID_BOX_SIZING: Final = {"border-box", "content-box"}
 VALID_OVERFLOW: Final = {"scroll", "hidden", "auto"}
 VALID_ALIGN_HORIZONTAL: Final = {"left", "center", "right"}
 VALID_ALIGN_VERTICAL: Final = {"top", "middle", "bottom"}
-VALID_TEXT_ALIGN: Final = {"start", "end", "left", "right", "center", "justify"}
+VALID_POSITION: Final = {"relative", "absolute"}
+VALID_TEXT_ALIGN: Final = {
+    "start",
+    "end",
+    "left",
+    "right",
+    "center",
+    "justify",
+}
 VALID_SCROLLBAR_GUTTER: Final = {"auto", "stable"}
 VALID_STYLE_FLAGS: Final = {
     "b",
@@ -52,5 +61,32 @@ VALID_STYLE_FLAGS: Final = {
     "underline",
     "uu",
 }
-
-NULL_SPACING: Final = Spacing.all(0)
+VALID_PSEUDO_CLASSES: Final = {
+    "ansi",
+    "blur",
+    "can-focus",
+    "dark",
+    "disabled",
+    "enabled",
+    "focus-within",
+    "focus",
+    "hover",
+    "inline",
+    "light",
+    "nocolor",
+    "first-of-type",
+    "last-of-type",
+    "odd",
+    "even",
+}
+VALID_OVERLAY: Final = {"none", "screen"}
+VALID_CONSTRAIN: Final = {"inflect", "inside", "none"}
+VALID_KEYLINE: Final = {"none", "thin", "heavy", "double"}
+VALID_HATCH: Final = {"left", "right", "cross", "vertical", "horizontal"}
+HATCHES: Final = {
+    "left": "╲",
+    "right": "╱",
+    "cross": "╳",
+    "horizontal": "─",
+    "vertical": "│",
+}

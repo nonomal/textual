@@ -1,23 +1,28 @@
 # Display
 
-The `display` property defines whether a widget is displayed or not.
+The `display` style defines whether a widget is displayed or not.
 
 ## Syntax
 
 ```
-display: [none|block];
+display: block | none;
 ```
 
 ### Values
 
-| Value             | Description                                                               |
-|-------------------|---------------------------------------------------------------------------|
-| `block` (default) | Display the widget as normal                                              |
-| `none`            | The widget not be displayed, and space will no longer be reserved for it. |
+| Value             | Description                                                              |
+|-------------------|--------------------------------------------------------------------------|
+| `block` (default) | Display the widget as normal.                                            |
+| `none`            | The widget is not displayed and space will no longer be reserved for it. |
 
 ## Example
 
-Note that the second widget is hidden by adding the `"remove"` class which sets the display style to None.
+Note that the second widget is hidden by adding the `"remove"` class which sets the display style to `none`.
+
+=== "Output"
+
+    ```{.textual path="docs/examples/styles/display.py"}
+    ```
 
 === "display.py"
 
@@ -25,24 +30,19 @@ Note that the second widget is hidden by adding the `"remove"` class which sets 
     --8<-- "docs/examples/styles/display.py"
     ```
 
-=== "display.css"
+=== "display.tcss"
 
-    ```css
-    --8<-- "docs/examples/styles/display.css"
-    ```
-
-=== "Output"
-
-    ```{.textual path="docs/examples/styles/display.py"}
+    ```css hl_lines="13"
+    --8<-- "docs/examples/styles/display.tcss"
     ```
 
 ## CSS
 
-```sass
-/* Widget is on screen */
+```css
+/* Widget is shown */
 display: block;
 
-/* Widget is not on the screen */
+/* Widget is not shown */
 display: none;
 ```
 
@@ -65,3 +65,7 @@ widget.display = False
 # Show the widget
 widget.display = True
 ```
+
+## See also
+
+ - [`visibility`](./visibility.md) to specify whether a widget is visible or not.

@@ -1,5 +1,5 @@
 from textual.app import App
-from textual.widgets import Static
+from textual.widgets import Label
 
 TEXT = """I must not fear.
 Fear is the mind-killer.
@@ -11,8 +11,12 @@ Where the fear has gone there will be nothing. Only I will remain."""
 
 
 class MarginApp(App):
+    CSS_PATH = "margin.tcss"
+
     def compose(self):
-        yield Static(TEXT)
+        yield Label(TEXT)
 
 
-app = MarginApp(css_path="margin.css")
+if __name__ == "__main__":
+    app = MarginApp()
+    app.run()

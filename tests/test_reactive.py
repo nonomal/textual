@@ -1,9 +1,14 @@
+from __future__ import annotations
+
 import asyncio
 
 import pytest
 
-from textual.app import App
-from textual.reactive import reactive, var
+from textual.app import App, ComposeResult
+from textual.message import Message
+from textual.message_pump import MessagePump
+from textual.reactive import Reactive, TooManyComputesError, reactive, var
+from textual.widget import Widget
 
 OLD_VALUE = 5_000
 NEW_VALUE = 1_000_000
@@ -81,15 +86,14 @@ async def test_watch_async_init_true():
             await asyncio.wait_for(app.watcher_called_event.wait(), timeout=0.05)
         except TimeoutError:
             pytest.fail(
-                "Async watcher wasn't called within timeout when reactive init = True")
+                "Async watcher wasn't called within timeout when reactive init = True"
+            )
 
     assert app.count == OLD_VALUE
     assert app.watcher_old_value == OLD_VALUE
     assert app.watcher_new_value == OLD_VALUE  # The value wasn't changed
 
 
-@pytest.mark.xfail(
-    reason="Reactive watcher is incorrectly always called the first time it is set, even if value is same [issue#1230]")
 async def test_watch_init_false_always_update_false():
     class WatcherInitFalse(App):
         count = reactive(0, init=False)
@@ -102,6 +106,10 @@ async def test_watch_init_false_always_update_false():
     async with app.run_test():
         app.count = 0  # Value hasn't changed, and always_update=False, so watch_count shouldn't run
         assert app.watcher_call_count == 0
+        app.count = 0
+        assert app.watcher_call_count == 0
+        app.count = 1
+        assert app.watcher_call_count == 1
 
 
 async def test_watch_init_true():
@@ -140,10 +148,9 @@ async def test_reactive_always_update():
         # Value is the same, but always_update=True, so watcher called...
         app.first_name = "Darren"
         assert calls == ["first_name Darren"]
-        # TODO: Commented out below due to issue#1230, should work after issue fixed
         # Value is the same, and always_update=False, so watcher NOT called...
-        # app.last_name = "Burns"
-        # assert calls == ["first_name Darren"]
+        app.last_name = "Burns"
+        assert calls == ["first_name Darren"]
         # Values changed, watch method always called regardless of always_update
         app.first_name = "abc"
         app.last_name = "def"
@@ -153,15 +160,9 @@ async def test_reactive_always_update():
 async def test_reactive_with_callable_default():
     """A callable can be supplied as the default value for a reactive.
     Textual will call it in order to retrieve the default value."""
-    called_with_app = None
-
-    def set_called(app: App) -> int:
-        nonlocal called_with_app
-        called_with_app = app
-        return OLD_VALUE
 
     class ReactiveCallable(App):
-        value = reactive(set_called)
+        value = reactive(lambda: 123)
         watcher_called_with = None
 
         def watch_value(self, new_value):
@@ -169,9 +170,8 @@ async def test_reactive_with_callable_default():
 
     app = ReactiveCallable()
     async with app.run_test():
-        assert app.value == OLD_VALUE  # The value should be set to the return val of the callable
-    assert called_with_app is app  # Ensure the App is passed into the reactive default callable
-    assert app.watcher_called_with == OLD_VALUE
+        assert app.value == 123
+        assert app.watcher_called_with == 123
 
 
 async def test_validate_init_true():
@@ -214,8 +214,6 @@ async def test_validate_init_true_set_before_dom_ready():
         assert validator_call_count == 1
 
 
-
-@pytest.mark.xfail(reason="Compute methods not called when init=True [issue#1227]")
 async def test_reactive_compute_first_time_set():
     class ReactiveComputeFirstTimeSet(App):
         number = reactive(1)
@@ -226,15 +224,13 @@ async def test_reactive_compute_first_time_set():
 
     app = ReactiveComputeFirstTimeSet()
     async with app.run_test():
-        await asyncio.sleep(.2)  # TODO: We sleep here while issue#1218 is open
         assert app.double_number == 2
 
 
-@pytest.mark.xfail(reason="Compute methods not called immediately [issue#1218]")
 async def test_reactive_method_call_order():
     class CallOrder(App):
         count = reactive(OLD_VALUE, init=False)
-        count_times_ten = reactive(OLD_VALUE * 10)
+        count_times_ten = reactive(OLD_VALUE * 10, init=False)
         calls = []
 
         def validate_count(self, value: int) -> int:
@@ -264,3 +260,567 @@ async def test_reactive_method_call_order():
         ]
         assert app.count == NEW_VALUE + 1
         assert app.count_times_ten == (NEW_VALUE + 1) * 10
+
+
+async def test_premature_reactive_call():
+    watcher_called = False
+
+    class BrokenWidget(Widget):
+        foo = reactive(1)
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.foo = "bar"
+
+        async def watch_foo(self) -> None:
+            nonlocal watcher_called
+            watcher_called = True
+
+    class PrematureApp(App):
+        def compose(self) -> ComposeResult:
+            yield BrokenWidget()
+
+    app = PrematureApp()
+    async with app.run_test() as pilot:
+        assert watcher_called
+        app.exit()
+
+
+async def test_reactive_inheritance():
+    """Check that inheritance works as expected for reactives."""
+
+    class Primary(App):
+        foo = reactive(1)
+        bar = reactive("bar")
+
+    class Secondary(Primary):
+        foo = reactive(2)
+        egg = reactive("egg")
+
+    class Tertiary(Secondary):
+        baz = reactive("baz")
+
+    primary = Primary()
+    secondary = Secondary()
+    tertiary = Tertiary()
+
+    primary_reactive_count = len(primary._reactives)
+
+    # Secondary adds one new reactive
+    assert len(secondary._reactives) == primary_reactive_count + 1
+
+    Reactive._initialize_object(primary)
+    Reactive._initialize_object(secondary)
+    Reactive._initialize_object(tertiary)
+
+    # Primary doesn't have egg
+    with pytest.raises(AttributeError):
+        assert primary.egg
+
+    # primary has foo of 1
+    assert primary.foo == 1
+    # secondary has different reactive
+    assert secondary.foo == 2
+    # foo is accessible through tertiary
+    assert tertiary.foo == 2
+
+    with pytest.raises(AttributeError):
+        secondary.baz
+
+    assert tertiary.baz == "baz"
+
+
+async def test_compute():
+    """Check compute method is called."""
+
+    class ComputeApp(App):
+        count = var(0)
+        count_double = var(0)
+
+        def __init__(self) -> None:
+            self.start = 0
+            super().__init__()
+
+        def compute_count_double(self) -> int:
+            return self.start + self.count * 2
+
+    app = ComputeApp()
+
+    async with app.run_test():
+        assert app.count_double == 0
+        app.count = 1
+        assert app.count_double == 2
+        assert app.count_double == 2
+        app.count = 2
+        assert app.count_double == 4
+        app.start = 10
+        assert app.count_double == 14
+
+        with pytest.raises(AttributeError):
+            app.count_double = 100
+
+
+async def test_watch_compute():
+    """Check that watching a computed attribute works."""
+
+    watch_called: list[bool] = []
+
+    class Calculator(App):
+        numbers = var("0")
+        show_ac = var(True)
+        value = var("")
+
+        def compute_show_ac(self) -> bool:
+            return self.value in ("", "0") and self.numbers == "0"
+
+        def watch_show_ac(self, show_ac: bool) -> None:
+            """Called when show_ac changes."""
+            watch_called.append(show_ac)
+
+    app = Calculator()
+
+    # Referencing the value calls compute
+    # Setting any reactive values calls compute
+    async with app.run_test():
+        assert app.show_ac is True
+        app.value = "1"
+        assert app.show_ac is False
+        app.value = "0"
+        assert app.show_ac is True
+        app.numbers = "123"
+        assert app.show_ac is False
+
+    assert watch_called == [True, True, False, False, True, True, False, False]
+
+
+async def test_public_and_private_watch() -> None:
+    """If a reactive/var has public and private watches both should get called."""
+
+    calls: dict[str, bool] = {"private": False, "public": False}
+
+    class PrivateWatchTest(App):
+        counter = var(0, init=False)
+
+        def watch_counter(self) -> None:
+            calls["public"] = True
+
+        def _watch_counter(self) -> None:
+            calls["private"] = True
+
+    async with PrivateWatchTest().run_test() as pilot:
+        assert calls["private"] is False
+        assert calls["public"] is False
+        pilot.app.counter += 1
+        assert calls["private"] is True
+        assert calls["public"] is True
+
+
+async def test_private_validate() -> None:
+    calls: dict[str, bool] = {"private": False}
+
+    class PrivateValidateTest(App):
+        counter = var(0, init=False)
+
+        def _validate_counter(self, _: int) -> None:
+            calls["private"] = True
+
+    async with PrivateValidateTest().run_test() as pilot:
+        assert calls["private"] is False
+        pilot.app.counter += 1
+        assert calls["private"] is True
+
+
+async def test_public_and_private_validate() -> None:
+    """If a reactive/var has public and private validate both should get called."""
+
+    calls: dict[str, bool] = {"private": False, "public": False}
+
+    class PrivateValidateTest(App):
+        counter = var(0, init=False)
+
+        def validate_counter(self, _: int) -> None:
+            calls["public"] = True
+
+        def _validate_counter(self, _: int) -> None:
+            calls["private"] = True
+
+    async with PrivateValidateTest().run_test() as pilot:
+        assert calls["private"] is False
+        assert calls["public"] is False
+        pilot.app.counter += 1
+        assert calls["private"] is True
+        assert calls["public"] is True
+
+
+async def test_public_and_private_validate_order() -> None:
+    """The private validate should be called first."""
+
+    class ValidateOrderTest(App):
+        value = var(0, init=False)
+
+        def validate_value(self, value: int) -> int:
+            if value < 0:
+                return 42
+            return value
+
+        def _validate_value(self, value: int) -> int:
+            if value < 0:
+                return 73
+            return value
+
+    async with ValidateOrderTest().run_test() as pilot:
+        pilot.app.value = -10
+        assert pilot.app.value == 73
+
+
+async def test_public_and_private_compute() -> None:
+    """If a reactive/var has public and private compute both should get called."""
+
+    with pytest.raises(TooManyComputesError):
+
+        class PublicAndPrivateComputeTest(App):
+            counter = var(0, init=False)
+
+            def compute_counter(self):
+                pass
+
+            def _compute_counter(self):
+                pass
+
+
+async def test_private_compute() -> None:
+    class PrivateComputeTest(App):
+        double = var(0, init=False)
+        base = var(0, init=False)
+
+        def _compute_double(self) -> int:
+            return 2 * self.base
+
+    async with PrivateComputeTest().run_test() as pilot:
+        pilot.app.base = 5
+        assert pilot.app.double == 10
+
+
+async def test_async_reactive_watch_callbacks_go_on_the_watcher():
+    """Regression test for https://github.com/Textualize/textual/issues/3036.
+
+    This makes sure that async callbacks are called.
+    See the next test for sync callbacks.
+    """
+
+    from_app = False
+    from_holder = False
+
+    class Holder(Widget):
+        attr = var(None)
+
+        def watch_attr(self):
+            nonlocal from_holder
+            from_holder = True
+
+    class MyApp(App):
+        def __init__(self):
+            super().__init__()
+            self.holder = Holder()
+
+        def on_mount(self):
+            self.watch(self.holder, "attr", self.callback)
+
+        def update(self):
+            self.holder.attr = "hello world"
+
+        async def callback(self):
+            nonlocal from_app
+            from_app = True
+
+    async with MyApp().run_test() as pilot:
+        pilot.app.update()
+        await pilot.pause()
+        assert from_holder
+        assert from_app
+
+
+async def test_sync_reactive_watch_callbacks_go_on_the_watcher():
+    """Regression test for https://github.com/Textualize/textual/issues/3036.
+
+    This makes sure that sync callbacks are called.
+    See the previous test for async callbacks.
+    """
+
+    from_app = False
+    from_holder = False
+
+    class Holder(Widget):
+        attr = var(None)
+
+        def watch_attr(self):
+            nonlocal from_holder
+            from_holder = True
+
+    class MyApp(App):
+        def __init__(self):
+            super().__init__()
+            self.holder = Holder()
+
+        def on_mount(self):
+            self.watch(self.holder, "attr", self.callback)
+
+        def update(self):
+            self.holder.attr = "hello world"
+
+        def callback(self):
+            nonlocal from_app
+            from_app = True
+
+    async with MyApp().run_test() as pilot:
+        pilot.app.update()
+        await pilot.pause()
+        assert from_holder
+        assert from_app
+
+
+async def test_set_reactive():
+    """Test set_reactive doesn't call watchers."""
+
+    class MyWidget(Widget):
+        foo = reactive("")
+
+        def __init__(self, foo: str) -> None:
+            super().__init__()
+            self.set_reactive(MyWidget.foo, foo)
+
+        def watch_foo(self) -> None:
+            # Should never get here
+            1 / 0
+
+    class MyApp(App):
+        def compose(self) -> ComposeResult:
+            yield MyWidget("foobar")
+
+    app = MyApp()
+    async with app.run_test():
+        assert app.query_one(MyWidget).foo == "foobar"
+
+
+async def test_no_duplicate_external_watchers() -> None:
+    """Make sure we skip duplicated watchers."""
+
+    counter = 0
+
+    class Holder(Widget):
+        attr = var(None)
+
+    class MyApp(App[None]):
+        def __init__(self) -> None:
+            super().__init__()
+            self.holder = Holder()
+
+        def on_mount(self) -> None:
+            self.watch(self.holder, "attr", self.callback)
+            self.watch(self.holder, "attr", self.callback)
+
+        def callback(self) -> None:
+            nonlocal counter
+            counter += 1
+
+    app = MyApp()
+    async with app.run_test():
+        assert counter == 1
+        app.holder.attr = 73
+        assert counter == 2
+
+
+async def test_external_watch_init_does_not_propagate() -> None:
+    """Regression test for https://github.com/Textualize/textual/issues/3878.
+
+    Make sure that when setting an extra watcher programmatically and `init` is set,
+    we init only the new watcher and not the other ones, but at the same
+    time make sure both watchers work in regular circumstances.
+    """
+
+    logs: list[str] = []
+
+    class SomeWidget(Widget):
+        test_1: var[int] = var(0)
+        test_2: var[int] = var(0, init=False)
+
+        def watch_test_1(self) -> None:
+            logs.append("test_1")
+
+        def watch_test_2(self) -> None:
+            logs.append("test_2")
+
+    class InitOverrideApp(App[None]):
+        def compose(self) -> ComposeResult:
+            yield SomeWidget()
+
+        def on_mount(self) -> None:
+            def watch_test_2_extra() -> None:
+                logs.append("test_2_extra")
+
+            self.watch(self.query_one(SomeWidget), "test_2", watch_test_2_extra)
+
+    app = InitOverrideApp()
+    async with app.run_test():
+        assert logs == ["test_1", "test_2_extra"]
+        app.query_one(SomeWidget).test_2 = 73
+        assert logs.count("test_2_extra") == 2
+        assert logs.count("test_2") == 1
+
+
+async def test_external_watch_init_does_not_propagate_to_externals() -> None:
+    """Regression test for https://github.com/Textualize/textual/issues/3878.
+
+    Make sure that when setting an extra watcher programmatically and `init` is set,
+    we init only the new watcher and not the other ones (even if they were
+    added dynamically with `watch`), but at the same time make sure all watchers
+    work in regular circumstances.
+    """
+
+    logs: list[str] = []
+
+    class SomeWidget(Widget):
+        test_var: var[int] = var(0)
+
+    class MyApp(App[None]):
+        def compose(self) -> ComposeResult:
+            yield SomeWidget()
+
+        def add_first_watcher(self) -> None:
+            def first_callback() -> None:
+                logs.append("first")
+
+            self.watch(self.query_one(SomeWidget), "test_var", first_callback)
+
+        def add_second_watcher(self) -> None:
+            def second_callback() -> None:
+                logs.append("second")
+
+            self.watch(self.query_one(SomeWidget), "test_var", second_callback)
+
+    app = MyApp()
+    async with app.run_test():
+        assert logs == []
+        app.add_first_watcher()
+        assert logs == ["first"]
+        app.add_second_watcher()
+        assert logs == ["first", "second"]
+        app.query_one(SomeWidget).test_var = 73
+        assert logs == ["first", "second", "first", "second"]
+
+
+async def test_message_sender_from_reactive() -> None:
+    """Test that the sender of a message comes from the reacting widget."""
+
+    message_senders: list[MessagePump | None] = []
+
+    class TestWidget(Widget):
+        test_var: var[int] = var(0, init=False)
+
+        class TestMessage(Message):
+            pass
+
+        def watch_test_var(self) -> None:
+            self.post_message(self.TestMessage())
+
+        def make_reaction(self) -> None:
+            self.test_var += 1
+
+    class TestContainer(Widget):
+        def compose(self) -> ComposeResult:
+            yield TestWidget()
+
+        def on_test_widget_test_message(self, event: TestWidget.TestMessage) -> None:
+            nonlocal message_senders
+            message_senders.append(event._sender)
+
+    class TestApp(App[None]):
+        def compose(self) -> ComposeResult:
+            yield TestContainer()
+
+    async with TestApp().run_test() as pilot:
+        assert message_senders == []
+        pilot.app.query_one(TestWidget).make_reaction()
+        await pilot.pause()
+        assert message_senders == [pilot.app.query_one(TestWidget)]
+
+
+async def test_mutate_reactive() -> None:
+    """Test explicitly mutating reactives"""
+
+    watched_names: list[list[str]] = []
+
+    class TestWidget(Widget):
+        names: reactive[list[str]] = reactive(list)
+
+        def watch_names(self, names: list[str]) -> None:
+            watched_names.append(names.copy())
+
+    class TestApp(App):
+        def compose(self) -> ComposeResult:
+            yield TestWidget()
+
+    app = TestApp()
+    async with app.run_test():
+        widget = app.query_one(TestWidget)
+        # watch method called on startup
+        assert watched_names == [[]]
+
+        # Mutate the list
+        widget.names.append("Paul")
+        # No changes expected
+        assert watched_names == [[]]
+        # Explicitly mutate the reactive
+        widget.mutate_reactive(TestWidget.names)
+        # Watcher will be invoked
+        assert watched_names == [[], ["Paul"]]
+        # Make further modifications
+        widget.names.append("Jessica")
+        widget.names.remove("Paul")
+        # No change expected
+        assert watched_names == [[], ["Paul"]]
+        # Explicit mutation
+        widget.mutate_reactive(TestWidget.names)
+        # Watcher should be invoked
+        assert watched_names == [[], ["Paul"], ["Jessica"]]
+
+
+async def test_mutate_reactive_data_bind() -> None:
+    """https://github.com/Textualize/textual/issues/4825"""
+
+    # Record mutations to TestWidget.messages
+    widget_messages: list[list[str]] = []
+
+    class TestWidget(Widget):
+        messages: reactive[list[str]] = reactive(list, init=False)
+
+        def watch_messages(self, names: list[str]) -> None:
+            widget_messages.append(names.copy())
+
+    class TestApp(App):
+        messages: reactive[list[str]] = reactive(list, init=False)
+
+        def compose(self) -> ComposeResult:
+            yield TestWidget().data_bind(TestApp.messages)
+
+    app = TestApp()
+    async with app.run_test():
+        test_widget = app.query_one(TestWidget)
+        assert widget_messages == [[]]
+        assert test_widget.messages == []
+
+        # Should be the same instance
+        assert app.messages is test_widget.messages
+
+        # Mutate app
+        app.messages.append("foo")
+        # Mutations aren't detected
+        assert widget_messages == [[]]
+        assert app.messages == ["foo"]
+        assert test_widget.messages == ["foo"]
+        # Explicitly mutate app reactive
+        app.mutate_reactive(TestApp.messages)
+        # Mutating app, will also invoke watchers on any data binds
+        assert widget_messages == [[], ["foo"]]
+        assert app.messages == ["foo"]
+        assert test_widget.messages == ["foo"]

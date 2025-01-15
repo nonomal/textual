@@ -1,6 +1,6 @@
 from textual.app import App
-from textual.containers import Vertical
-from textual.widgets import Static
+from textual.containers import Horizontal, ScrollableContainer
+from textual.widgets import Label
 
 TEXT = """I must not fear.
 Fear is the mind-killer.
@@ -13,9 +13,15 @@ Where the fear has gone there will be nothing. Only I will remain.
 
 
 class ScrollbarApp(App):
+    CSS_PATH = "scrollbars.tcss"
+
     def compose(self):
-        yield Vertical(Static(TEXT * 5), classes="panel1")
-        yield Vertical(Static(TEXT * 5), classes="panel2")
+        yield Horizontal(
+            ScrollableContainer(Label(TEXT * 10)),
+            ScrollableContainer(Label(TEXT * 10), classes="right"),
+        )
 
 
-app = ScrollbarApp(css_path="scrollbars.css")
+if __name__ == "__main__":
+    app = ScrollbarApp()
+    app.run()
